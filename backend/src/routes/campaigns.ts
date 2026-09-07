@@ -9,7 +9,7 @@ import {
   validateLaunch,
   type CampaignRow,
 } from '../lib/launch'
-import { createCampaignOnChain, loadDeployment, usdToWei } from '../lib/onchain'
+import { createCampaignOnChain, loadDeployment, readRootEnvVar, usdToWei } from '../lib/onchain'
 import { loadEscrowState } from '../lib/escrowState'
 import { SEED_CAMPAIGNS, SEED_COMPANY_A, SEED_COMPANY_B, SEED_TEST_PAYLOADS } from '../lib/seedCampaigns'
 import { triggerWorkflow, loadRelayKey } from '../lib/relay'
@@ -253,8 +253,12 @@ campaigns.post('/:id/launch', async (c) => {
       // report metadata; the escrow's reportOwner must match or onReport
       // reverts (silently — forwarder logs success=00, nothing mints). Factory
       // default is workflowOwner, which differs → pass it explicitly.
-      reportOwner: (process.env.WORKFLOW_OWNER_ADDRESS || deployment?.deployer) as Address,
-      workflowOwner: (process.env.WORKFLOW_OWNER_ADDRESS || deployment?.deployer) as Address,
+      // Bun auto-loads only backend/.env, so also fall back to the ROOT .env
+      // (same pattern as the CRE_ETH_PRIVATE_KEY fallback in onchain.ts) —
+      // 2026-09-08: a launch with only deployment.deployer in scope shipped
+      // reportOwner=0x9587… and every claim minted nothing.
+      reportOwner: (process.env.WORKFLOW_OWNER_ADDRESS || (await readRootEnvVar('WORKFLOW_OWNER_ADDRESS')) || deployment.deployer) as Address,
+      workflowOwner: (process.env.WORKFLOW_OWNER_ADDRESS || (await readRootEnvVar('WORKFLOW_OWNER_ADDRESS')) || deployment.deployer) as Address,
       rewardUri: process.env.REWARD_URI || 'https://wizard.example/api/metadata/{id}.json',
       salt: salt as Hex,
       companyA: row.company_a as Address,

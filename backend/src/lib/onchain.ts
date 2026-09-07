@@ -78,6 +78,14 @@ export interface CreateCampaignResult {
 // 18-decimal USD helper for min-spend/cap values (contract expects 18-dec fixed).
 export const usdToWei = (dollars: number): bigint => BigInt(Math.round(dollars * 1e18))
 
+/** Read `KEY=value` from the repo-root .env (bun auto-loads only backend/.env). */
+export async function readRootEnvVar(key: string): Promise<string | undefined> {
+  const rootEnv = join(import.meta.dir, '..', '..', '..', '.env')
+  const text = await readFile(rootEnv, 'utf8').catch(() => '')
+  const line = text.split('\n').find((l) => l.startsWith(`${key}=`))
+  return line?.split('=').slice(1).join('=').trim() || undefined
+}
+
 export async function createCampaignOnChain(args: CreateCampaignArgs): Promise<CreateCampaignResult> {
   const deployment = await loadDeployment()
   // CRE_ETH_PRIVATE_KEY lives in the repo-root .env (shared with the CRE

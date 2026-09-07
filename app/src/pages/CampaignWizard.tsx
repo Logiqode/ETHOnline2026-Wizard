@@ -241,7 +241,11 @@ export default function CampaignWizard() {
     const discountPerTxCap = rewardBlockStates.discount === 'enabled' && rewardValues.discountPerTxCapEnabled
       ? (rewardValues.discountType === 'Percentage (%)' ? rewardValues.discountPerTxCap : rewardValues.discountValue)
       : null
-    rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${ruleValues.minSpend} cap=${ruleValues.cap} perTxCap=${perTxCap ?? 'none'} discountPerTxCap=${discountPerTxCap ?? 'none'}`, mono: true })
+    // The launch mapping zeroes out disabled rules (minSpendWei = 0 when the
+    // rule is off), so show what actually lands on-chain — not the input box.
+    const minSpendOnChain = ruleStates['min-spend'] === 'enabled' ? ruleValues.minSpend : 0
+    const capOnChain = ruleStates['reward-cap'] === 'enabled' ? ruleValues.cap : 0
+    rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${minSpendOnChain} cap=${capOnChain} perTxCap=${perTxCap ?? 'none'} discountPerTxCap=${discountPerTxCap ?? 'none'}`, mono: true })
     return rows
   }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues, redeemCapEnabled, assetLabel, capUnit, capSuffix, launch])
 

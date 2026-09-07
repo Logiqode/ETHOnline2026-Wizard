@@ -30,6 +30,10 @@ interface EscrowState {
   minSpendUsd: number
   capEnabled: boolean
   capUsd: number
+  perTxCapEnabled: boolean
+  perTxCapUsd: number
+  dayOfWeekEnabled: boolean
+  daysOfWeek: number
   flatEnabled: boolean
   flatValueUsd: number
   redeemable: boolean
@@ -340,11 +344,12 @@ export default function CampaignDetail() {
         {onchain ? (
           <div>
             <div className="insight-row">
-              <span className="insight-label">Mechanic (on-chain)</span>
+              <span className="insight-label">Reward</span>
               <span className="insight-value">
                 {onchain.flatEnabled
                   ? `Flat $${onchain.flatValueUsd.toFixed(2)}${onchain.redeemable ? ' cashback' : ' discount (proof-of-savings)'}`
-                  : `${(onchain.rateBps / 100).toFixed(1)}% cashback`}
+                  : `${(onchain.rateBps / 100).toFixed(1)}%${onchain.redeemable ? ' cashback' : ' discount (proof-of-savings)'}`}
+                {onchain.perTxCapEnabled ? ` + per-tx cap $${onchain.perTxCapUsd.toFixed(2)}` : ''}
               </span>
             </div>
             <div className="insight-row">
@@ -353,7 +358,11 @@ export default function CampaignDetail() {
             </div>
             <div className="insight-row">
               <span className="insight-label">Per-user cap</span>
-              <span className="insight-value">{onchain.capEnabled ? `$${onchain.capUsd.toFixed(2)}` : 'none'}</span>
+              <span className="insight-value">{onchain.capEnabled ? `$${onchain.capUsd.toFixed(2)} (lifetime — no reset window on-chain)` : 'none'}</span>
+            </div>
+            <div className="insight-row">
+              <span className="insight-label">Day of week</span>
+              <span className="insight-value">{onchain.dayOfWeekEnabled ? `enabled (mask 0b${onchain.daysOfWeek.toString(2).padStart(7, '0')})` : 'none'}</span>
             </div>
             <div className="insight-row">
               <span className="insight-label">Window</span>
