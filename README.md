@@ -160,6 +160,8 @@ cre workflow simulate ./wizard --target=staging-settings -e .env --http-payload 
 - `-e .env` loads the environment (including `CAMPAIGN_NULLIFIER_MASTER`, read by the enclave at runtime — no shell export needed).
 - `--http-payload <path>` is the HTTP request body. Payload files live in `wizard/test-payloads/`.
 
+> **Before demoing: rotate the `userAnchor`.** All payloads share one test anchor (`0xAAaA…0001`). Simulate itself never writes on-chain (the cap it shows comes from the payload's `earnedInWindow`, not the ledger), but any *live* claims you fire during testing accumulate against that anchor's on-chain ledger — against a $100 lifetime cap. Swap in a fresh address (e.g. `0xAAaA000000000000000000000000000000000002`) across the payloads before a demo so every claim has full headroom and a clean participants entry. One `sed` does it: `sed -i 's/AAaA000000000000000000000000000000000001/<new-anchor-hex>/g' wizard/test-payloads/*.json`.
+
 The simulation reads campaign terms **live from the deployed contracts on Base Sepolia** (factory → escrow), so the verdicts below reflect real on-chain state.
 
 The three live demo campaigns (seeded on the deployed factory — see `contracts/script/SeedCampaigns.s.sol`):
@@ -180,7 +182,7 @@ for p in wizard/test-payloads/onchain-*.json wizard/test-payloads/flat-*.json wi
 done
 ```
 
-Expected results (live on-chain terms, campaign window ≈ Sep 2026 → 2100):
+Expected results (live on-chain terms, campaign window Sep 2026 → Sep 2027):
 
 ```
 onchain-1-pass.json              → APPROVE points=3 reason=ok           (10% of $30)
@@ -188,7 +190,7 @@ onchain-1-below-min.json         → REJECT points=0 reason=below-min-spend
 onchain-1-cap-clamp.json         → APPROVE points=5 reason=ok           ($100 spend, 95 earned — clamped to cap)
 onchain-1-cap-exhausted.json     → REJECT points=0 reason=cap-exhausted
 onchain-1-after-end.json         → REJECT points=0 reason=after-campaign-end
-onchain-2-pass.json              → APPROVE points=2 reason=ok           (10% of $40 spend — legacy payload predating the flat mechanic; campaign 2 is now flat $2, so re-running it today earns the $2 flat)
+onchain-2-pass.json              → APPROVE points=2 reason=ok           (campaign 2 is flat $2 — file predates the mechanic switch)
 onchain-2-below-min.json         → REJECT points=0 reason=below-min-spend
 flat-2-pass.json                 → APPROVE points=2 reason=ok           (flat $2, $30 spend)
 flat-2-big-spend-same-earn.json  → APPROVE points=2 reason=ok           ($90 spend — same flat $2)
@@ -196,7 +198,15 @@ flat-2-below-min.json            → REJECT points=0 reason=below-min-spend
 discount-3-pass.json             → APPROVE points=5 reason=ok           ($5 saved, $30 spend)
 discount-3-small-spend.json      → APPROVE points=5 reason=ok           ($12 spend — same $5 saving)
 discount-3-below-min.json        → REJECT points=0 reason=below-min-spend
+campaign-a-pass.json             → APPROVE points=3 reason=ok           (same as onchain-1-pass, alt anchor)
+campaign-a-fail-below-min.json   → REJECT points=0 reason=below-min-spend
+campaign-c-pass.json             → APPROVE points=5 reason=ok           ($5 saved, $20 spend)
+campaign-c-fail-below-min.json   → REJECT points=0 reason=below-min-spend
+campaign-2-min-spend-boundary.json → APPROVE points=2 reason=ok         (exactly $10.00 = min spend → passes)
+campaign-1-cap-exhausted.json    → REJECT points=0 reason=cap-exhausted (earned 100 = at cap)
 ```
+
+All 19 payload files currently pass with these verdicts (verified against the gen-3 factory on 2026-09-08).
 
 Simulation output shows the handler's `runtime.log` lines (debug only — removed for production) and ends with the verdict, e.g.:
 
