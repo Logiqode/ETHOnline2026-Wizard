@@ -50,9 +50,43 @@ campaigns.post('/', async (c) => {
 })
 
 // GET /api/campaigns — list campaigns
+// Only campaigns the LIVE factory knows about are listed: a DB row counts as
+// live if it carries an onchainCampaignId whose factory entry matches the
+// row's escrow, or (wizard-launched rows) whose escrow was created by this
+// factory. Anything else (stale rows from superseded factory generations) is
+// hidden — the DB is bookkeeping, the factory registry is the source of truth.
 campaigns.get('/', async (c) => {
   const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns ORDER BY id DESC`
-  return c.json(rows.map(toApi))
+
+  // Resolve the live factory registry once: id -> escrow address.
+  let registry: Map<number, string> | null = null
+  try {
+    const deployment = await loadDeployment()
+    const { createPublicClient, http, parseAbi } = await import('viem')
+    const { baseSepolia } = await import('viem/chains')
+    const client = createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com') })
+    const abi = parseAbi(['function campaigns(uint256) view returns (address escrow, address reward, uint256 rewardTokenId, uint64 start, uint64 end)', 'function nextCampaignId() view returns (uint256)'])
+    const nextId = Number(await client.readContract({ address: deployment.factory, abi, functionName: 'nextCampaignId' }))
+    registry = new Map()
+    for (let i = 1; i < nextId; i++) {
+      const entry = await client.readContract({ address: deployment.factory, abi, functionName: 'campaigns', args: [BigInt(i)] })
+      registry.set(i, (entry[0] as Address).toLowerCase())
+    }
+  } catch {
+    // Factory/RPC unavailable — fall through with null registry and list DB rows as-is.
+  }
+
+  const live = rows.filter((row) => {
+    if (!row.escrow_address) return false // drafts without deployment
+    if (!registry) return true // fallback: keep DB as-is when the factory can't be read
+    const onchainId = (row.terms as { onchainCampaignId?: number } | null)?.onchainCampaignId
+    if (onchainId) return registry.get(onchainId) === row.escrow_address.toLowerCase()
+    // Wizard-launched: no onchainCampaignId recorded — treat as live only if
+    // the escrow appears somewhere in the factory registry.
+    const escrowLower = row.escrow_address.toLowerCase()
+    return [...registry.values()].includes(escrowLower)
+  })
+  return c.json(live.map(toApi))
 })
 
 // GET /api/campaigns/:id

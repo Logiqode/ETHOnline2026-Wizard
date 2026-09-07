@@ -1,7 +1,8 @@
 // ─── On-chain escrow state reader (Base Sepolia) ────────────────────────────
-// Read-only viem client for the campaign detail page: terms, per-user ledger,
-// platform fees accrued, and the escrow/reward addresses for a campaign id.
-import { createPublicClient, http, parseAbi, type Address } from 'viem'
+// Read-only viem client for the campaign detail page: terms, the participant
+// ledger (scanned from Claim events), platform fees accrued, and the
+// escrow/reward addresses for a campaign id.
+import { createPublicClient, http, parseAbi, parseAbiItem, type Address } from 'viem'
 import { baseSepolia } from 'viem/chains'
 
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com'
@@ -20,7 +21,19 @@ const escrowAbi = parseAbi([
   'function usedNullifiers(bytes32) view returns (bool)',
 ])
 
+const CLAIM_EVENT = parseAbiItem('event Claim(bytes32 indexed nullifier, address indexed recipient, uint256 points, uint256 amountSpent)')
+
 export const DEMO_USER_ANCHOR = '0xAAaA000000000000000000000000000000000001' as Address
+
+export interface Participant {
+  address: Address
+  totalBalance: string // lifetime earned (raw 18-dec)
+  unspentBalance: string // currently spendable (raw 18-dec; == totalBalance for discount campaigns)
+  originalBlock: number // first participation block
+  claims: number // Claim events observed for this wallet
+  amountSpentUsd: number // total purchase volume across claims (18-dec USD)
+  lastClaimBlock: number
+}
 
 export interface EscrowState {
   escrow: Address
@@ -36,12 +49,13 @@ export interface EscrowState {
   flatEnabled: boolean
   flatValueUsd: number
   redeemable: boolean
+  platformFeeBps: number
+  platformFeeAccount: Address
   platformFeesAccrued: string // raw 18-dec reward units as string
-  demoUser: {
-    totalBalance: string // lifetime earned (raw 18-dec)
-    unspentBalance: string // currently spendable (raw 18-dec)
-    originalBlock: number
-  }
+  participants: Participant[]
+  // True when the Claim-event scan had to fall back to a narrower window
+  // (public RPC range limits) — the list may then miss very old claims.
+  participantsPartial: boolean
 }
 
 const formatUsd = (raw: bigint): number => Number(raw) / 1e18
@@ -53,21 +67,64 @@ export async function loadEscrowState(escrow: Address): Promise<EscrowState> {
   // public struct getters as POSITIONAL tuples in struct-field order:
   // [rateBps, start, end, reward, rewardTokenId, rules, platformFeeBps, platformFeeAccount]
   const terms = await client.readContract({ address: escrow, abi: escrowAbi, functionName: 'terms' })
-  const [rateBps, start, end, reward, rewardTokenId, rules] = terms as readonly [
+  const [rateBps, start, end, reward, rewardTokenId, rules, platformFeeBps, platformFeeAccount] = terms as readonly [
     bigint, bigint, bigint, Address, bigint,
     { minSpendEnabled: boolean; minSpend: bigint; capEnabled: boolean; cap: bigint; dayOfWeekEnabled: boolean; daysOfWeek: number; flatEnabled: boolean; flatValue: bigint; redeemable: boolean },
     bigint, Address,
   ]
 
-  const [feesAccrued, demoLedger] = await Promise.all([
-    client.readContract({ address: escrow, abi: escrowAbi, functionName: 'platformFeesAccrued' }),
-    client.readContract({
-      address: escrow,
-      abi: escrowAbi,
-      functionName: 'campaignLedger',
-      args: [rewardTokenId, DEMO_USER_ANCHOR],
+  const feesAccrued = await client.readContract({ address: escrow, abi: escrowAbi, functionName: 'platformFeesAccrued' })
+
+  // ── Participants: scan Claim events since the campaign window opened ──────
+  // Claims can only land inside [terms.start, terms.end], so deriving the scan
+  // start from the window start keeps the query small. Public Base Sepolia
+  // RPCs cap eth_getLogs ranges (publicnode: 50k blocks ≈ 28h) — clamp to
+  // that; if the clamp hides claims we flag the list as partial. For demo
+  // campaigns seeded days ago the clamp covers everything that happened.
+  const head = await client.getBlockNumber()
+  const MAX_RANGE = 49_000n // just under the publicnode 50k limit
+  const estFrom = head - BigInt(Math.ceil((Math.floor(Date.now() / 1000) - Number(start)) / 2) + 1000)
+  const fromBlock = estFrom > 0n ? (estFrom < head - MAX_RANGE ? head - MAX_RANGE : estFrom) : (head > MAX_RANGE ? head - MAX_RANGE : 0n)
+  const participantsPartial = fromBlock > estFrom || estFrom < 0n
+  const claimLogs = await client.getLogs({ address: escrow, event: CLAIM_EVENT, fromBlock, toBlock: 'latest' })
+
+  // Unique recipients in first-seen order; the ledger read is the source of
+  // truth for balances (nullifiers make claims one-per-user, so the event
+  // sums always agree with the ledger — the ledger is still authoritative).
+  const seen = new Map<Address, { claims: number; amountSpentUsd: bigint; lastClaimBlock: number }>()
+  for (const log of claimLogs) {
+    const recipient = log.args.recipient as Address | undefined
+    if (!recipient) continue
+    const agg = seen.get(recipient) ?? { claims: 0, amountSpentUsd: 0n, lastClaimBlock: 0 }
+    agg.claims += 1
+    agg.amountSpentUsd += (log.args.amountSpent as bigint) ?? 0n
+    agg.lastClaimBlock = Number(log.blockNumber)
+    seen.set(recipient, agg)
+  }
+
+  const participants: Participant[] = await Promise.all(
+    [...seen.entries()].map(async ([address, agg]) => {
+      const ledger = await client.readContract({
+        address: escrow,
+        abi: escrowAbi,
+        functionName: 'campaignLedger',
+        args: [rewardTokenId, address],
+      })
+      const [totalBalance, unspentBalance, originalBlock] = ledger as readonly [bigint, bigint, bigint]
+      return {
+        address,
+        totalBalance: totalBalance.toString(),
+        unspentBalance: unspentBalance.toString(),
+        originalBlock: Number(originalBlock),
+        claims: agg.claims,
+        amountSpentUsd: formatUsd(agg.amountSpentUsd),
+        lastClaimBlock: agg.lastClaimBlock,
+      }
     }),
-  ])
+  )
+  // Biggest earners first — the demo usually has 1-5 rows, newest activity is
+  // still visible via the lastClaimBlock column.
+  participants.sort((a, b) => Number(b.totalBalance) - Number(a.totalBalance) || a.address.localeCompare(b.address))
 
   return {
     escrow,
@@ -83,11 +140,10 @@ export async function loadEscrowState(escrow: Address): Promise<EscrowState> {
     flatEnabled: rules.flatEnabled,
     flatValueUsd: formatUsd(rules.flatValue),
     redeemable: rules.redeemable,
+    platformFeeBps: Number(platformFeeBps),
+    platformFeeAccount: platformFeeAccount,
     platformFeesAccrued: feesAccrued.toString(),
-    demoUser: {
-      totalBalance: demoLedger[0].toString(),
-      unspentBalance: demoLedger[1].toString(),
-      originalBlock: Number(demoLedger[2]),
-    },
+    participants,
+    participantsPartial,
   }
 }

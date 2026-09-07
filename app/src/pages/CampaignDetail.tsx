@@ -33,8 +33,20 @@ interface EscrowState {
   flatEnabled: boolean
   flatValueUsd: number
   redeemable: boolean
+  platformFeeBps: number
   platformFeesAccrued: string
-  demoUser: { totalBalance: string; unspentBalance: string; originalBlock: number }
+  participants: Participant[]
+  participantsPartial: boolean
+}
+
+interface Participant {
+  address: string
+  totalBalance: string // lifetime earned (raw 18-dec)
+  unspentBalance: string // currently spendable (raw 18-dec)
+  originalBlock: number
+  claims: number
+  amountSpentUsd: number
+  lastClaimBlock: number
 }
 
 interface TestPayloadInfo {
@@ -61,22 +73,38 @@ interface TriggerResult {
 
 const WEI = 1e18
 const toUnits = (raw: string): string => (Number(raw) / WEI).toFixed(2)
+// ETH amounts this small need significant digits, not fixed decimals — an
+// 8.04e-7 ETH claim shows as "0.0000" under toFixed(4). Render as 0.0₆804:
+// the subscript is the EXACT count of zeros between the decimal point and
+// the first significant digit (0.0₆804 = 0.000000804), mantissa ≤ 3 digits.
+const sub = (n: number): string => String(n).split('').map((d) => '₀₁₂₃₄₅₆₇₈₉'[Number(d)] ?? d).join('')
+const ethSig = (v: number): string => {
+  if (v === 0) return '0'
+  const sign = v < 0 ? '-' : ''
+  const a = Math.abs(v)
+  if (a >= 0.001) return sign + a.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+  const exp = Math.floor(Math.log10(a)) // 8.04e-7 → -7
+  let zeros = -exp - 1 // zeros between '.' and first digit
+  let mantissa = Math.round(a * 10 ** (-exp) * 100) // 8.04e-7 → 804
+  if (mantissa >= 1000) { // 9.999e-7 rounding up → 1.000e-6
+    mantissa = Math.round(mantissa / 10)
+    zeros -= 1
+  }
+  return `${sign}0.0${sub(zeros)}${mantissa}`
+}
 const short = (a: string): string => `${a.slice(0, 8)}…${a.slice(-6)}`
 const explorer = (a: string): string => `https://sepolia.basescan.org/address/${a}`
 
 // ─── Deposit log (demo model) ───────────────────────────────────────────────
 // The OperatingDeposit is a *recorded* amount (0.01 ETH equivalent, settled
-// off-chain) — see README "Gas & the operating deposit". The demo log renders
-// it as a single platform-paid entry plus the gas the claims consumed.
-interface DepositEntry {
-  label: string
-  amount: string
-  note: string
-}
+// off-chain) — see README "Gas & the operating deposit".
 
 function formatDateTime(unix: number): string {
   return new Date(unix * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
+
+const thStyle: React.CSSProperties = { textAlign: 'left', padding: '6px 10px 6px 0', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid #e3e8ee', whiteSpace: 'nowrap' }
+const tdStyle: React.CSSProperties = { padding: '8px 10px 8px 0', borderBottom: '1px solid #eef1f4' }
 
 export default function CampaignDetail() {
   const { id } = useParams<{ id: string }>()
@@ -176,29 +204,38 @@ export default function CampaignDetail() {
         ? `$${rv.cashbackFlat} discount (proof-of-savings)`
         : `${rv.cashbackRate}% cashback in ${rv.cashbackToken ?? 'points'}`
 
-  // Gas meter (demo model): each claim costs ≈ 190k gas on this escrow; the
-  // operating deposit covers an estimated budget of claims. This is presentational —
-  // real per-campaign gas accounting is the ERC-4337 paymaster roadmap item.
-  const CLAIM_GAS = 190_000
+  // Gas meter (demo model): gas is estimated from the REAL per-claim receipts
+  // on this escrow (~268k gas, ~0.006 gwei effective on Base Sepolia → ≈
+  // 0.0000016 ETH per claim). Rounded to 4 decimals the total reads 0.0000 —
+  // Base Sepolia gas is genuinely that cheap. Real per-campaign accounting is
+  // the ERC-4337 paymaster roadmap item.
+  const CLAIM_GAS = 268_000
+  const GWEI = 0.006
   const DEPOSIT_ETH = Number(campaign.operatingDepositWei) / WEI
-  const claimsFunded = Math.floor((DEPOSIT_ETH * 1e18) / (CLAIM_GAS * 0.05e9)) // @ 0.05 gwei
-  const claimsUsed = testPayload ? 1 : 0 // placeholder — wired to the ledger count below
-  void claimsUsed
+  const claimsFunded = Math.floor((DEPOSIT_ETH * 1e18) / (CLAIM_GAS * GWEI * 1e9))
+  const claimCount = onchain?.participants.reduce((n, p) => n + p.claims, 0) ?? 0
+  const gasUsedEth = claimCount * CLAIM_GAS * GWEI * 1e9 / 1e18
+  const totalGasUsed = gasUsedEth // total campaign spend (balance drawdown = usage)
 
-  const deposits: DepositEntry[] = [
-    {
-      label: 'Initial Deposit',
-      amount: `$25.00`,
-      note: 'Paid by the platform wallet for demo purposes (operating deposit, settled off-chain).',
-    },
-  ]
-  if (onchain && onchain.demoUser.totalBalance !== '0') {
-    deposits.push({
-      label: 'Claim settlement (demo user)',
-      amount: `${toUnits(onchain.demoUser.totalBalance)} ${rv.cashbackToken ?? 'points'}`,
-      note: 'DON-verified claim settled on-chain — minted to 0xAAA…0001.',
-    })
-  }
+  // Operating-fee balances per company (mirror of the factory's _recordDeposit:
+  // feeSplitBps% of the deposit is what each company has PAID into the platform
+  // reserve — their balance), drawn down by that company's share of usage.
+  // Balances are allowed to go NEGATIVE: if one company's share runs dry, the
+  // other's deposit keeps the campaign running, and the deficit is a debt the
+  // drained company owes back at withdrawal/campaign end (settlement).
+  const splitA = campaign.fee_split_bps
+  const balanceA = (DEPOSIT_ETH * splitA) / 10_000
+  const balanceB = DEPOSIT_ETH - balanceA
+  const usageA = gasUsedEth * (splitA / 10_000)
+  const usageB = gasUsedEth * (1 - splitA / 10_000)
+  const netA = balanceA - usageA // signed; negative = owes the platform
+  const netB = balanceB - usageB
+  // Who is covering whom: the positive-side company fronts the negative-side
+  // company's overage (the platform is made whole either way).
+  const coveredByA = netA >= 0 && netB < 0 ? -netB : 0 // A covered part of B's share
+  const coveredByB = netB >= 0 && netA < 0 ? -netA : 0 // B covered part of A's share
+  // Platform fee accrual in reward units (per-tx platformFeeBps uplift; the
+  // demo escrows were seeded with platformFeeBps=0, so this is usually 0).
 
   return (
     <div className="page">
@@ -258,46 +295,121 @@ export default function CampaignDetail() {
         )}
       </div>
 
-      {/* ── Balances + gas meter ────────────────────────────────────────── */}
+      {/* ── Participants (live escrow ledger) ───────────────────────────── */}
       {onchain && (
         <div className="card">
-          <div className="card-title">Balances & gas</div>
+          <div className="card-title">Participants</div>
           <div className="card-desc">
-            Demo user 0xAAA…0001 — live from the escrow ledger (block {onchain.demoUser.originalBlock}).
+            Wallets that earned from this campaign — live from the escrow ledger (first-seen block{' '}
+            {Math.min(...onchain.participants.map((p) => p.originalBlock))}).
+          </div>
+          {onchain.participants.length === 0 ? (
+            <p className="field-hint">No claims yet — send a payload below to mint the first reward.</p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    {['Wallet', onchain.redeemable ? 'Lifetime earned' : 'Total saved', onchain.redeemable ? 'Spendable' : null, 'Cap used', 'Claims', 'Spend volume', 'First block']
+                      .filter(Boolean)
+                      .map((h) => (
+                        <th key={h as string} style={thStyle}>{h}</th>
+                      ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {onchain.participants.map((p) => {
+                    const total = Number(p.totalBalance) / WEI
+                    const unspent = Number(p.unspentBalance) / WEI
+                    const capUsed = onchain.capEnabled ? `${Math.min(100, (total / onchain.capUsd) * 100).toFixed(0)}% of $${onchain.capUsd}` : 'no cap'
+                    return (
+                      <tr key={p.address}>
+                        <td style={tdStyle}><span className="mono"><a href={explorer(p.address)} target="_blank" rel="noreferrer">{short(p.address)}</a></span></td>
+                        <td style={tdStyle}><span className="mono">{total.toFixed(2)} {rv.cashbackToken ?? 'points'}</span></td>
+                        {onchain.redeemable && <td style={tdStyle}><span className="mono">{unspent.toFixed(2)} {rv.cashbackToken ?? 'points'}</span></td>}
+                        <td style={tdStyle}>{capUsed}</td>
+                        <td style={tdStyle}>{p.claims}</td>
+                        <td style={tdStyle}>${p.amountSpentUsd.toFixed(2)}</td>
+                        <td style={tdStyle}><span className="mono">{p.originalBlock}</span></td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {onchain.participantsPartial && (
+            <p className="field-hint" style={{ marginTop: 8 }}>
+              Scanned the last ~49k blocks (public-RPC range limit) — claims older than that may be missing.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ── Operating fees (gas + platform + per-company deposit owed) ──── */}
+      {onchain && (
+        <div className="card">
+          <div className="card-title">Operating fees</div>
+          <div className="card-desc">
+            {claimCount} claim{claimCount === 1 ? '' : 's'} through the workflow — gas from the real per-claim receipts (~268k gas @ ~0.006 gwei on Base Sepolia; per-campaign metering is the paymaster roadmap item).
           </div>
           <div className="insight-row">
-            <span className="insight-label">Lifetime earned</span>
-            <span className="insight-value mono">{toUnits(onchain.demoUser.totalBalance)} {rv.cashbackToken ?? 'points'}</span>
+            <span className="insight-label">Workflow gas used</span>
+            <span className="insight-value mono">{ethSig(gasUsedEth)} ETH ({claimCount} × ~{CLAIM_GAS.toLocaleString()} gas @ {GWEI} gwei)</span>
           </div>
           <div className="insight-row">
-            <span className="insight-label">{onchain.redeemable ? 'Available (spendable)' : 'Total saved (proof-of-savings)'}</span>
+            <span className="insight-label">Chainlink CRE fees</span>
+            <span className="insight-value mono">$0.00 <span className="field-hint" style={{ display: 'inline' }}>(free tier for the hackathon demo — not tracked)</span></span>
+          </div>
+          <div className="insight-row">
+            <span className="insight-label">Platform fee accrual</span>
             <span className="insight-value mono">
-              {toUnits(onchain.redeemable ? onchain.demoUser.unspentBalance : onchain.demoUser.totalBalance)} {rv.cashbackToken ?? 'points'}
+              {onchain.platformFeeBps > 0
+                ? `${toUnits(onchain.platformFeesAccrued)} ${rv.cashbackToken ?? 'points'} (${(onchain.platformFeeBps / 100).toFixed(1)}% per claim)`
+                : 'none (platformFeeBps = 0 on this escrow)'}
             </span>
           </div>
           <div className="insight-row">
-            <span className="insight-label">Platform fees accrued</span>
-            <span className="insight-value mono">{toUnits(onchain.platformFeesAccrued)} {rv.cashbackToken ?? 'points'}</span>
+            <span className="insight-label">Operating-fee balance (paid)</span>
+            <span className="insight-value mono">{DEPOSIT_ETH.toFixed(3)} ETH ≈ {claimsFunded.toLocaleString()} claims of headroom</span>
           </div>
 
           <div style={{ marginTop: 16 }}>
-            <div className="field-label">Gas meter <span className="field-hint" style={{ display: 'inline' }}>(demo estimate @ 0.05 gwei · ~190k gas/claim)</span></div>
-            <div style={{ height: 10, background: '#eef1f4', borderRadius: 5, overflow: 'hidden', marginTop: 6 }}>
-              <div style={{ width: `${Math.min(100, (1 / Math.max(claimsFunded, 1)) * 100)}%`, height: '100%', background: '#6366f1' }} />
+            <div className="field-label">Total usage <span className="field-hint" style={{ display: 'inline' }}>(cumulative gas spent by this campaign, split per company against their operating-fee balance — balances may go negative, see settlement note)</span></div>
+            <div className="insight-row">
+              <span className="insight-label">{campaign.company_a_name} (POS) — {(splitA / 100).toFixed(0)}% split</span>
+              <span className="insight-value mono">
+                {ethSig(usageA)} / {ethSig(balanceA)} ETH
+                <span className="field-hint" style={{ display: 'inline' }}> · {ethSig(netA)} ETH left</span>
+              </span>
             </div>
-            <div className="field-hint" style={{ marginTop: 6 }}>
-              {DEPOSIT_ETH.toFixed(3)} ETH deposit funds ≈ {claimsFunded.toLocaleString()} claims · deposits are custody, not revenue (see README).
+            <div className="insight-row">
+              <span className="insight-label">{campaign.company_b_name} (Redeem) — {((10_000 - splitA) / 100).toFixed(0)}% split</span>
+              <span className="insight-value mono">
+                {ethSig(usageB)} / {ethSig(balanceB)} ETH
+                <span className="field-hint" style={{ display: 'inline' }}> · {ethSig(netB)} ETH left</span>
+              </span>
             </div>
-          </div>
-
-          <div style={{ marginTop: 16 }}>
-            <div className="field-label">Deposit log</div>
-            {deposits.map((d, i) => (
-              <div key={i} className="insight-row">
-                <span className="insight-label">{d.label} — <strong>{d.amount}</strong></span>
-                <span className="field-hint" style={{ display: 'inline' }}>{d.note}</span>
+            <div style={{ marginTop: 10 }}>
+              <div style={{ height: 10, background: '#eef1f4', borderRadius: 5, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.min(100, (totalGasUsed / Math.max(DEPOSIT_ETH, 1e-12)) * 100)}%`,
+                  height: '100%',
+                  background: '#6366f1',
+                  transition: 'width 300ms',
+                }} />
               </div>
-            ))}
+              <div className="field-hint" style={{ marginTop: 6 }}>
+                {ethSig(totalGasUsed)} spent of {DEPOSIT_ETH.toFixed(3)} ETH operating-fee balance ({Math.min(100, (totalGasUsed / Math.max(DEPOSIT_ETH, 1e-12)) * 100).toFixed(4)}% used)
+              </div>
+            </div>
+            {(coveredByA > 0 || coveredByB > 0) && (
+              <div style={{ marginTop: 10, padding: '8px 12px', background: '#fff7e6', border: '1px solid #f5d48f', borderRadius: 6, fontSize: 13 }}>
+                {coveredByB > 0
+                  ? <><strong>{campaign.company_b_name}</strong> covered {ethSig(coveredByB)} ETH of <strong>{campaign.company_a_name}</strong>'s gas (A's share ran dry). Owed by {campaign.company_a_name} at settlement/campaign end.</>
+                  : <><strong>{campaign.company_a_name}</strong> covered {ethSig(coveredByA)} ETH of <strong>{campaign.company_b_name}</strong>'s gas (B's share ran dry). Owed by {campaign.company_b_name} at settlement/campaign end.</>}
+              </div>
+            )}
           </div>
         </div>
       )}
