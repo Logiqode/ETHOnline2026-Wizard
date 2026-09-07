@@ -83,8 +83,9 @@ export interface SeedTestPayload {
 }
 
 // timestamp 1789000000 ≈ 2026-09-12 (a Saturday? no — epoch math puts it on a
-// Friday UTC) — inside every seeded campaign's window. Anchors are per-case so
-// the pass payload never collides with a previous run's nullifier.
+// Friday UTC) — inside every seeded campaign's window. Anchors AND timestamps
+// are per-case so no pass payload ever collides with a previous run's
+// nullifier (nullifier = f(master, campaignId, anchor, timestamp)).
 export const SEED_TEST_PAYLOADS: Record<number, SeedTestPayload[]> = {
   1: [
     {

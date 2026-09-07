@@ -321,17 +321,22 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 }
 
 // ─── Nullifier (master-salt derivation, enclave-only) ───────────
-// campaignSecret = HMAC-SHA256(master, campaignId); nullifier = keccak256(campaignSecret || userAnchor).
-// One Vault secret covers every campaign; the secret never leaves the enclave.
+// campaignSecret = HMAC-SHA256(master, campaignId); nullifier = keccak256(campaignSecret || userAnchor || timestamp).
+// The payload timestamp (POS purchase time) is the per-receipt freshness
+// element: the same wallet can claim once per purchase, while re-submitting
+// the SAME purchase (same timestamp) derives the same nullifier and is
+// rejected by the escrow's usedNullifiers check. One Vault secret covers
+// every campaign; the secret never leaves the enclave.
 // Uses @noble/hashes (pure JS) — node:crypto is not available in CRE WASM workflows.
 import { hmac } from '@noble/hashes/hmac.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 
-function deriveNullifier(master: string, campaignId: number, userAnchor: string): `0x${string}` {
+function deriveNullifier(master: string, campaignId: number, userAnchor: string, timestamp: number): `0x${string}` {
 	const campaignSecret = hmac(sha256, toBytes(master), toBytes(String(campaignId)))
-	const digest = keccak256(concatHex([toHex(campaignSecret), toHex(userAnchor as `0x${string}`)]))
+	const digest = keccak256(concatHex([toHex(campaignSecret), toHex(userAnchor as `0x${string}`), toHex(toBytes(String(timestamp)))]))
 	return digest
 }
+export { deriveNullifier }
 
 // ─── HTTP Trigger Handler (runs inside the enclave) ────────────
 export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload): string => {
@@ -367,8 +372,10 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 	const verdict = evaluate(request, campaign)
 	runtime.log(`eligibility: ${verdict.reason} eligible=${verdict.eligible} points=${verdict.points}`)
 
-	// Nullifier derived from the Vault master secret (enclave-only).
-	const nullifier = deriveNullifier(master, request.campaignId, request.userAnchor)
+	// Nullifier derived from the Vault master secret (enclave-only). Timestamp
+	// = per-purchase freshness element (same wallet + same purchase ts =
+	// same nullifier → replay rejected; different purchase → new claim).
+	const nullifier = deriveNullifier(master, request.campaignId, request.userAnchor, request.timestamp)
 
 	if (!verdict.eligible) {
 		runtime.log(`ineligible (${verdict.reason}) — no on-chain write`)

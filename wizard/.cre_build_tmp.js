@@ -23563,9 +23563,9 @@ function readCampaignOnChain(runtime2, evmClient, campaignId) {
     daysOfWeek: dowMask
   };
 }
-function deriveNullifier(master, campaignId, userAnchor) {
+function deriveNullifier(master, campaignId, userAnchor, timestamp) {
   const campaignSecret = hmac2(sha2562, toBytes(master), toBytes(String(campaignId)));
-  const digest = keccak256(concatHex([toHex(campaignSecret), toHex(userAnchor)]));
+  const digest = keccak256(concatHex([toHex(campaignSecret), toHex(userAnchor), toHex(toBytes(String(timestamp)))]));
   return digest;
 }
 var onHTTPTrigger = (runtime2, payload) => {
@@ -23582,7 +23582,7 @@ var onHTTPTrigger = (runtime2, payload) => {
   runtime2.log(`on-chain terms: escrow=${campaign.escrow} rateBps=${campaign.rateBps} window=[${campaign.start},${campaign.end}] minSpend=${campaign.minSpend} cap=${campaign.cap}`);
   const verdict = evaluate(request, campaign);
   runtime2.log(`eligibility: ${verdict.reason} eligible=${verdict.eligible} points=${verdict.points}`);
-  const nullifier = deriveNullifier(master, request.campaignId, request.userAnchor);
+  const nullifier = deriveNullifier(master, request.campaignId, request.userAnchor, request.timestamp);
   if (!verdict.eligible) {
     runtime2.log(`ineligible (${verdict.reason}) — no on-chain write`);
     return `REJECT points=0 reason=${verdict.reason}`;

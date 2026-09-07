@@ -76,12 +76,14 @@ cd app && bun run dev
 The wizard's **Launch Campaign** now saves a campaign draft in Postgres, validates
 launch (fee split 0–10000 bps, non-zero fee accounts, ≥ 0.01 ETH operating deposit
 — mirrors `CampaignFactory.createCampaign`), and stores the generated CREATE2 salt.
-On-chain `createCampaign()` wiring is still pending deployment, so escrow/reward
-addresses stay null (honest boundary). See `backend/src/lib/launch.ts`. The
+Launch calls `createCampaign()` on-chain, stores the escrow/reward addresses, and
+records the factory-assigned on-chain id in `terms.onchainCampaignId` — note the
+**two id namespaces**: the Postgres row id (used by the UI/URLs) differs from the
+factory's sequential campaign id (what the workflow reads via `campaigns(id)`), so
+the payload route forwards the on-chain id, never the DB id. The
 **Campaigns** page lists only campaigns the live factory registry actually knows
-about (each DB row must prove factory membership — seeded rows via
-`terms.onchainCampaignId` → factory escrow match, wizard-launched rows via the
-escrow appearing in the factory registry) — stale DB rows from superseded
+about (each DB row must prove factory membership — via
+`terms.onchainCampaignId` → factory escrow match) — stale DB rows from superseded
 factory generations are hidden. Each campaign's detail page shows live
 **Participants** (per-wallet ledger from scanned `Claim` events: lifetime
 earned / spendable / totalSaved, cap usage, claim count, spend volume) and
@@ -218,32 +220,78 @@ Recorded in `contracts/deployments/base-sepolia.json` (rewritten by the deploy s
 
 | Contract | Address |
 |---|---|
-| `CampaignFactory` | [`0xf60c0882605E3A43e4983f79D775ba333be69acC`](https://sepolia.basescan.org/address/0xf60c0882605E3A43e4983f79D775ba333be69acC) |
-| `CampaignEscrow` (implementation; campaigns are EIP-1167 clones of it) | [`0xA64B521DdCF9C9A27B8E382c03BCa6b5646FfdF8`](https://sepolia.basescan.org/address/0xA64B521DdCF9C9A27B8E382c03BCa6b5646FfdF8) |
+| `CampaignFactory` | [`0xA563808fEb15469D67d671b60b437edD850A6196`](https://sepolia.basescan.org/address/0xA563808fEb15469D67d671b60b437edD850A6196) |
+| `CampaignEscrow` (implementation; campaigns are EIP-1167 clones of it) | [`0xD42ae67201181c642Ca15854E136Ec9c2b1ECDf2`](https://sepolia.basescan.org/address/0xD42ae67201181c642Ca15854E136Ec9c2b1ECDf2) |
 | CRE Forwarder (Chainlink's production forwarder, not ours) | [`0xF8344CFd5c43616a4366C34E3EEE75af79a74482`](https://sepolia.basescan.org/address/0xF8344CFd5c43616a4366C34E3EEE75af79a74482) |
 
-**Demo campaigns (seeded via `contracts/script/SeedCampaigns.s.sol`)**
+**Demo campaigns (1–3 seeded via `contracts/script/SeedCampaigns.s.sol`; 4 = the first wizard-launched campaign)**
 
 | # | Escrow clone | Reward (ERC-1155) |
 |---|---|---|
-| 1 | [`0x2888C3E4929ACC07Db30c24351e76abF342eB02b`](https://sepolia.basescan.org/address/0x2888C3E4929ACC07Db30c24351e76abF342eB02b) | [`0x1B2327Db86AD5508a0a40Dd64bdE00B9E88F4F44`](https://sepolia.basescan.org/address/0x1B2327Db86AD5508a0a40Dd64bdE00B9E88F4F44) |
-| 2 | [`0x5fce7344bDEf336afffd16162238365B88C99da9`](https://sepolia.basescan.org/address/0x5fce7344bDEf336afffd16162238365B88C99da9) | [`0x7dd2133D85CF68fAB983B5D19E375cb3d44d3D86`](https://sepolia.basescan.org/address/0x7dd2133D85CF68fAB983B5D19E375cb3d44d3D86) |
-| 3 | [`0xe741d92DEdFa3bC88B6765b7ceAe90F400F90a31`](https://sepolia.basescan.org/address/0xe741d92DEdFa3bC88B6765b7ceAe90F400F90a31) | [`0x362Ac52fc453d4a8DD76e3FA038C0C3c2A707d50`](https://sepolia.basescan.org/address/0x362Ac52fc453d4a8DD76e3FA038C0C3c2A707d50) |
+| 1 | [`0x8f6aDcBf3a492a448e06eD2249146350b7535D33`](https://sepolia.basescan.org/address/0x8f6aDcBf3a492a448e06eD2249146350b7535D33) | [`0x5Ecc1B878032cb8185FCBd0079E9eCE34e32F92a`](https://sepolia.basescan.org/address/0x5Ecc1B878032cb8185FCBd0079E9eCE34e32F92a) |
+| 2 | [`0x089b4D0d09884dF07332E3eA68009B304ac13FAc`](https://sepolia.basescan.org/address/0x089b4D0d09884dF07332E3eA68009B304ac13FAc) | [`0x4080376ab2Ae3BCd19387ac2Fcf10db4c7F66108`](https://sepolia.basescan.org/address/0x4080376ab2Ae3BCd19387ac2Fcf10db4c7F66108) |
+| 3 | [`0xb4b3eEd3AD298aBDFB56A299839d6B7422F92273`](https://sepolia.basescan.org/address/0xb4b3eEd3AD298aBDFB56A299839d6B7422F92273) | [`0x537346037296fAc0Af2ed39eBd073f8946384aD3`](https://sepolia.basescan.org/address/0x537346037296fAc0Af2ed39eBd073f8946384aD3) |
+| 4 | [`0xE63DC2d8f267C387B22f2ADa949D1B5486aA5c2B`](https://sepolia.basescan.org/address/0xE63DC2d8f267C387B22f2ADa949D1B5486aA5c2B) | [`0x9C83d9a60b7bbA0FB8838E62de14199AE513CB84`](https://sepolia.basescan.org/address/0x9C83d9a60b7bbA0FB8838E62de14199AE513CB84) |
 
 **Key transactions**
 
 | What | Tx |
 |---|---|
-| Deploy `CampaignEscrow` implementation | [`0xab892c2b6e7dd5ad85b13f0fec5f9bffe96e6b13fbf1d589c54d00dc7e958174`](https://sepolia.basescan.org/tx/0xab892c2b6e7dd5ad85b13f0fec5f9bffe96e6b13fbf1d589c54d00dc7e958174) |
-| Deploy `CampaignFactory` | [`0xf3e5aa38a9dec9fcab8916519c9d02226854c6659b7e50106d8d4a45daf3d691`](https://sepolia.basescan.org/tx/0xf3e5aa38a9dec9fcab8916519c9d02226854c6659b7e50106d8d4a45daf3d691) |
-| Seed campaign 1 | [`0x35f7648847c76c3ab26578547e1cf40d556707fa2add5adb9278cc0a80b1e0cc`](https://sepolia.basescan.org/tx/0x35f7648847c76c3ab26578547e1cf40d556707fa2add5adb9278cc0a80b1e0cc) |
-| Seed campaign 2 | [`0x7edbf6ff8a190db43721cdb70ce925a174115cbb781216acbaaf0dda10383163`](https://sepolia.basescan.org/tx/0x7edbf6ff8a190db43721cdb70ce925a174115cbb781216acbaaf0dda10383163) |
-| Seed campaign 3 | [`0xdcb3053feb95c8f09f6377e14dde72bd897a3f666ba77322f73283a3d10a5b87`](https://sepolia.basescan.org/tx/0xdcb3053feb95c8f09f6377e14dde72bd897a3f666ba77322f73283a3d10a5b87) |
+| Deploy `CampaignEscrow` implementation | [`0xf7682d530f674c2244ecd57e1b4382b609fbf810f6438ae7b5e4405ae9429fa4`](https://sepolia.basescan.org/tx/0xf7682d530f674c2244ecd57e1b4382b609fbf810f6438ae7b5e4405ae9429fa4) |
+| Deploy `CampaignFactory` | [`0x8d93a6636484fc79ecd5e39a4de28c74fbd0b423ff2184939e1d73f542e3c2f2`](https://sepolia.basescan.org/tx/0x8d93a6636484fc79ecd5e39a4de28c74fbd0b423ff2184939e1d73f542e3c2f2) |
+| Seed campaign 1 | [`0x1b9ecd72145ea7cc4d652a251bf829c22636de6b61e1e19417c94368d0e9da76`](https://sepolia.basescan.org/tx/0x1b9ecd72145ea7cc4d652a251bf829c22636de6b61e1e19417c94368d0e9da76) |
+| Seed campaign 2 | [`0x3f70d9aa3c2277cc08acdd6afd77eef28707d0f973d12dd04732d81408ff1114`](https://sepolia.basescan.org/tx/0x3f70d9aa3c2277cc08acdd6afd77eef28707d0f973d12dd04732d81408ff1114) |
+| Seed campaign 3 | [`0xb752647ef503d804c40d3e9c3b5ac76de74be05c21c7e5786a72642e6e42a75a`](https://sepolia.basescan.org/tx/0xb752647ef503d804c40d3e9c3b5ac76de74be05c21c7e5786a72642e6e42a75a) |
 | **End-to-end claim** (DON report → escrow `Claim` + ERC-1155 mint, `ReportProcessed success=true`) | [`0x7903f511099c7c182dd017195dd35a45a0986b809c972d224c208e83ce65f9c2`](https://sepolia.basescan.org/tx/0x7903f511099c7c182dd017195dd35a45a0986b809c972d224c208e83ce65f9c2) |
 
-**CRE workflow**: `wizard-staging`, workflow ID `00fc3f22dcaa4f7e1872383ec09ed01c12625c3622659d2dc2c7d5f62619cbc6` (gen-3: reads the gen-3 factory `0xA563…6196`; private registry, zone-a DON family, owner `0x8996097709d886abD468511BfB5A7279110e15d8`). Fired via the signed-relay path (see `backend/scripts/trigger.ts`).
+**CRE workflow**: `wizard-staging`, workflow ID `00e8a289eeef0a8f5d13b00b6d6a617853de65e2750309321d57e7b149c98f05` (gen-3: reads the gen-3 factory `0xA563…6196`; private registry, zone-a DON family, owner `0x8996097709d886abD468511BfB5A7279110e15d8`; nullifier includes the payload timestamp — see the privacy notes below). Fired via the signed-relay path (see `backend/scripts/trigger.ts`).
 
-Each payload is a request body `{ campaignId, userAnchor, merchantId, amountSpent, timestamp, earnedInWindow, items }`. `earnedInWindow` is how much the user already earned in the current reset window (0 after a rollover). Edit the JSON to test different scenarios (below/above min-spend, window edges, cap clamp/exhaustion). Use **distinct `userAnchor`s for approve cases** (duplicate anchors mint the same nullifier → on-chain duplicate-claim collision). `userAnchor` casing is free-form — the workflow normalizes it via viem's `getAddress()` before encoding (callers are not required to pre-checksum; this bug cost us a morning of "phantom" campaign-2 failures, see the EIP-55 note below).
+### Deploying from scratch
+
+Full teardown-to-live sequence. Copy `.env.example` → `.env` and fill in the secrets first (`CRE_ETH_PRIVATE_KEY`, `CAMPAIGN_NULLIFIER_MASTER`); every address variable below is explained there.
+
+**1. Deploy the core contracts** (escrow implementation + factory — this is the "master factory"):
+
+```bash
+cd contracts
+export PATH="$HOME/.foundry/bin:$PATH"
+forge script script/Deploy.s.sol --rpc-url https://sepolia.base.org --broadcast --private-key $CRE_ETH_PRIVATE_KEY --sender 0x<your-deployer-eoa>
+```
+
+This rewrites `contracts/deployments/base-sepolia.json` with the new `factory` / `escrowImplementation` / `deployer` — every other component reads that file, so nothing needs hand-editing yet.
+
+**2. Seed the demo campaigns.** `WORKFLOW_OWNER` is **mandatory** (the script reverts without it):
+
+```bash
+FACTORY=0x<new-factory> WORKFLOW_OWNER=0x<registry-owner> \
+  forge script script/SeedCampaigns.s.sol --rpc-url https://sepolia.base.org --broadcast --private-key $CRE_ETH_PRIVATE_KEY --sender 0x<your-deployer-eoa>
+```
+
+> **`WORKFLOW_OWNER` vs `REPORT_OWNER` — the pitfall that cost us a morning.** The DON stamps every report with the *registry* owner (the account that deployed the workflow, printed by `cre workflow deploy` in step 3), while `workflowOwner` is the EOA allowed to submit claims. If the escrow's `reportOwner` doesn't match the registry owner, the forwarder delivers with `success=00` / state `NotAttempted` and every claim silently fails while the DON verdict looks green. Both default to the same EOA in a solo setup — pass `WORKFLOW_OWNER` explicitly and they stay in sync. (A mismatch on already-deployed escrows is repairable with `setReportOwner()` — no redeploy needed.)
+
+**3. Point the workflow at the new factory and deploy it** (PowerShell — the CRE CLI is a Windows app):
+
+```powershell
+# wizard/config.staging.json → set "factoryAddress" to the new factory
+cre workflow build ./wizard
+cre workflow deploy ./wizard --target=staging-settings
+```
+
+The deploy output prints the registry owner (use it as `WORKFLOW_OWNER` in step 2 if you haven't seeded yet) and the new **workflow ID**. Wait ~90s for gateway propagation before firing payloads.
+
+**4. Wire the backend**: put the new workflow ID in `.env` as `WORKFLOW_ID=0x…`, and set `WORKFLOW_OWNER_ADDRESS` (the claim-submitting EOA) so wizard-launched campaigns get the right `workflowOwner`.
+
+**5. Register the seeded campaigns in the DB** (their on-chain state exists but Postgres has no rows yet):
+
+```bash
+curl -X POST localhost:4000/api/campaigns/seed
+```
+
+This reads escrow/reward addresses **live from the factory** by on-chain id and stores the mapping (`terms.onchainCampaignId`) — the payload route needs it, because the workflow addresses campaigns by the factory's sequential id, not the Postgres row id.
+
+**6. Verify**: fire a test payload on a seeded campaign (`POST /api/campaigns/<id>/payload?await=1`) and check the escrow's `Claim` event on Basescan — a green DON verdict alone doesn't prove the escrow accepted the report.
+
+Each payload is a request body `{ campaignId, userAnchor, merchantId, amountSpent, timestamp, earnedInWindow, items }`. `earnedInWindow` is how much the user already earned in the current reset window (0 after a rollover). Edit the JSON to test different scenarios (below/above min-spend, window edges, cap clamp/exhaustion). Repeat purchases by the SAME anchor are fine — the nullifier includes the payload `timestamp`, so each distinct purchase mints afresh (same wallet + same timestamp = same nullifier → on-chain duplicate-claim/replay rejection). `userAnchor` casing is free-form — the workflow normalizes it via viem's `getAddress()` before encoding (callers are not required to pre-checksum; this bug cost us a morning of "phantom" campaign-2 failures, see the EIP-55 note below).
 
 ---
 
@@ -272,7 +320,7 @@ cre workflow deploy ./wizard --target=staging-settings
 - The `totalRedeemCap` and the reset-window *boundary* are carried in config and enforced by the caller/escrow; the workflow clamps the per-user cap against the caller-supplied `earnedInWindow`.
 - **Gas & the operating deposit (production roadmap).** In this demo the platform wallet (an EOA) pays all gas directly and the `OperatingDeposit` is each company's **prepaid operating-fee balance** — split per `feeSplitBps` at creation and drawn down by that company's share of campaign gas (the detail page's Operating-fees card tracks this live, including a signed balance: if one company's share runs dry mid-campaign, the other's deposit fronts the difference and the UI flags the covered amount as a **debt the drained company owes at settlement/campaign end** — keeping the campaign running never silently transfers cost). In production the roadmap is: companies deposit **USDC** (via Stripe/Coinbase fiat rails) into platform custody, and an **ERC-4337 paymaster — e.g. Coinbase Developer Platform's, billed in USDC — sponsors all campaign gas**, so neither the platform nor the companies hold ETH and deposits are USDC-denominated (no bear-market exposure on held deposits). Trade-off, honestly stated: the DIY alternative (platform holds a small ETH float, tops up from USDC periodically) avoids paymaster fees and smart-account (4337) constraints but reintroduces an ETH treasury to manage; the paymaster buys zero-ETH friction at a per-tx fee. Either way, deposits are **custody, not revenue** — unspent (net-positive) balances refund to the company at campaign end, after netting any covered-debt.
 - **Pricing follow-through (business model).** The demo contract's `platformFeeBps` (10% uplift in the demo terms) exists as a *cost-plus buffer*: gas + an ETH-volatility premium so the platform doesn't bleed out while holding a float. Once gas is USDC-denominated (paymaster or periodic swap), that buffer's reason disappears and the platform fee drops to a thin value-based margin (e.g. ~1.5%, or 0% as a deliberate growth subsidy) — the fee is just a per-campaign parameter in `CampaignTerms`, so infrastructure savings flow straight through to customer pricing without code changes.
-- **Nullifier privacy model — trust & security implications (read before pitching).** Each claim carries a nullifier `H(HMAC(CAMPAIGN_NULLIFIER_MASTER, campaignId) || userAnchor)`; its on-chain job is **anti-double-claim, not anonymity** — the claim event writes the recipient wallet address next to the nullifier, so recipient identity is public at claim time. The system is honestly **pseudonymous-but-linkable, never zero-knowledge**. What the single Vault-held master secret protects: no one outside the enclave (node operators, observers, even the platform itself in normal operation) can test whether a given wallet produced a given nullifier — the hash is one-way, so a nullifier cannot be *inverted* to a wallet; holding the secret would only enable *candidate testing* ("did wallet X produce nullifier N?"), turning the registry into a linkage oracle. Concretely, the parties who could ever run such brute-force identity-linking are the campaign participants (who already know their own customers) and whoever operates the payload ingress — third parties and observers cannot, which is the privacy claim we make and no more. Integrity is a separate mechanism entirely: forged claims are impossible even with the master leaked, because claims execute only through the DON-consensus report path (forwarder + workflow identity checks in `onReport`). Production hardening (deferred): derive with an epoch — `HMAC(master, epoch || campaignId)` — so rotating the master invalidates future linkage tests without touching campaign terms.
+- **Nullifier privacy model — trust & security implications (read before pitching).** Each claim carries a nullifier `H(HMAC(CAMPAIGN_NULLIFIER_MASTER, campaignId) || userAnchor || timestamp)` — the payload timestamp (POS purchase time) is the per-receipt freshness element; its on-chain job is **anti-double-claim (one claim per purchase, not per user), not anonymity** — the claim event writes the recipient wallet address next to the nullifier, so recipient identity is public at claim time. The system is honestly **pseudonymous-but-linkable, never zero-knowledge**. What the single Vault-held master secret protects: no one outside the enclave (node operators, observers, even the platform itself in normal operation) can test whether a given wallet produced a given nullifier — the hash is one-way, so a nullifier cannot be *inverted* to a wallet; holding the secret would only enable *candidate testing* ("did wallet X produce nullifier N?"), turning the registry into a linkage oracle. Concretely, the parties who could ever run such brute-force identity-linking are the campaign participants (who already know their own customers) and whoever operates the payload ingress — third parties and observers cannot, which is the privacy claim we make and no more. Integrity is a separate mechanism entirely: forged claims are impossible even with the master leaked, because claims execute only through the DON-consensus report path (forwarder + workflow identity checks in `onReport`). Production hardening (deferred): derive with an epoch — `HMAC(master, epoch || campaignId)` — so rotating the master invalidates future linkage tests without touching campaign terms.
 - **Redemption privacy — the earn-side is public, so we hide the spend-side (open problem + roadmap).** The privacy model above has an asymmetry: **earning is chain-visible by design** (`Claim(user, nullifier)` links wallet → campaign → amount), while **redemption is where real-world value gets exchanged** — and that's where linkage becomes dangerous. Concretely: a user redeeming points for a promo item ("500 Bpoints → entry in a Japan holiday draw") today emits `Redeem(user, amount)`, so anyone correlating the chain with the public promo can build a targeted picture (who holds loyalty wealth, who entered which draw) — a **spear-phishing / social-engineering surface**, not a hypothetical. Identity source doesn't change this: even with both companies on Privy DIDs, the *wallet* remains the on-chain actor and the DID↔wallet join happens in whichever company's backend holds it. Mitigations, honest about cost:
   - **Company-side redemption sweep (deployable today, no contract change).** Company B sweeps users' points to its own org wallet via `redeemFor` in batches and runs the *actual* reward fulfillment (draw entries, catalog, anything) entirely off-chain in its local database, keyed by its own identity source. The chain then shows only "B's wallet redeemed N points" — **what** each user got is invisible; only **that** value left the system. Trade-offs accepted: per-user trust moves off-chain (B's DB becomes the ledger of record for redemptions; the escrow still bounds total supply, so B can't over-burn, but can't prove per-user fairness on-chain), and `platformFeeBps` would accrue per sweep rather than per redemption. Note what this does **not** fix: the earn-side `Claim` events remain public, and each sweep still touches user wallets (batching amortizes timing but the wallet-level footprint stays).
   - **`batchRedeem(bytes32[] commitments)` (contract roadmap).** Replace per-user redemption with a batch call over **commitments** — e.g. `commit = H(user || salt)` where the user derives and keeps the salt — so the escrow enforces *supply conservation* (sum of committed amounts ≤ minted, double-spend via used-commitment flags) while the chain learns **nothing about who redeemed what**: no user address, no per-user event, just an aggregate burn against the campaign's total. Identity becomes exactly what the nullifier design already is: the enclave/company holds the keyed mapping, the chain holds a fresh-ness-checked commitment. "ZK-shaped but not ZK" — same one-way-hash discipline as the claim nullifiers, without a prover. Combined with the sweep, this closes the loop: earn-side linkage stays (inherent to crediting a wallet), but the redemption graph — the part attackers can weaponize against users — disappears from the chain entirely.

@@ -11,7 +11,7 @@ import { join } from 'node:path'
 
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com'
 
-const factoryAbi = parseAbi([
+export const factoryAbi = parseAbi([
   'function createCampaign((uint256 rateBps, uint64 start, uint64 end, address reward, uint256 rewardTokenId, (bool minSpendEnabled, uint256 minSpend, bool capEnabled, uint256 cap, bool dayOfWeekEnabled, uint8 daysOfWeek, bool flatEnabled, uint256 flatValue, bool redeemable) rules, uint256 platformFeeBps, address platformFeeAccount) terms, address workflowOwner, address reportOwner, string rewardUri, bytes32 salt, address companyA, address companyB, uint256 feeSplitBps) returns (uint256 campaignId)',
   'function campaigns(uint256) view returns (address escrow, address reward, uint256 rewardTokenId, uint64 start, uint64 end)',
   'function nextCampaignId() view returns (uint256)',

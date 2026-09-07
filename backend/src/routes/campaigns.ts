@@ -252,7 +252,8 @@ campaigns.post('/:id/launch', async (c) => {
   const rows = await sql<CampaignRow[]>`
     UPDATE campaigns SET
       status = 'launched', salt = ${salt}, launched_at = NOW(),
-      escrow_address = ${onchain.escrow}, reward_address = ${onchain.reward}
+      escrow_address = ${onchain.escrow}, reward_address = ${onchain.reward},
+      terms = terms || ${sql.json({ onchainCampaignId: onchain.campaignId })}::jsonb
     WHERE id = ${id}
     RETURNING *
   `
@@ -455,7 +456,17 @@ campaigns.post('/:id/payload', async (c) => {
     return c.json({ error: 'No workflow id: pass workflowId in the body or set WORKFLOW_ID in root .env' }, 400)
   }
 
-  const { campaignId, userAnchor, merchantId, amountSpent, timestamp, earnedInWindow, items } = parsed.data
+  const { campaignId: dbCampaignId, userAnchor, merchantId, amountSpent, timestamp, earnedInWindow, items } = parsed.data
+
+  // The workflow reads campaign terms from the FACTORY, whose sequential ids
+  // differ from the wizard's Postgres ids (a wizard-launched row id 16 can be
+  // factory campaign 4). Forward the on-chain id stored at launch time
+  // (terms.onchainCampaignId); plain DB id as fallback.
+  const prow = (await sql<{ terms: { onchainCampaignId?: number } }[]>`
+    SELECT terms FROM campaigns WHERE id = ${id}
+  `)[0]
+  const campaignId = prow?.terms?.onchainCampaignId ?? dbCampaignId
+
   const input: Record<string, unknown> = {
     campaignId,
     userAnchor,

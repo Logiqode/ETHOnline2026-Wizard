@@ -89,8 +89,9 @@ export async function loadEscrowState(escrow: Address): Promise<EscrowState> {
   const claimLogs = await client.getLogs({ address: escrow, event: CLAIM_EVENT, fromBlock, toBlock: 'latest' })
 
   // Unique recipients in first-seen order; the ledger read is the source of
-  // truth for balances (nullifiers make claims one-per-user, so the event
-  // sums always agree with the ledger — the ledger is still authoritative).
+  // truth for balances (each claim has a unique per-purchase nullifier, so
+  // the event sums always agree with the ledger — the ledger is still
+  // authoritative).
   const seen = new Map<Address, { claims: number; amountSpentUsd: bigint; lastClaimBlock: number }>()
   for (const log of claimLogs) {
     const recipient = log.args.recipient as Address | undefined
