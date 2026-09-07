@@ -10,6 +10,9 @@ import {
   type CampaignRow,
 } from '../lib/launch'
 import { createCampaignOnChain, loadDeployment, usdToWei } from '../lib/onchain'
+import { loadEscrowState } from '../lib/escrowState'
+import { SEED_CAMPAIGNS, SEED_COMPANY_A, SEED_COMPANY_B, SEED_TEST_PAYLOADS } from '../lib/seedCampaigns'
+import { triggerWorkflow } from '../lib/relay'
 import type { Address, Hex } from 'viem'
 
 export const campaigns = new Hono()
@@ -218,4 +221,212 @@ campaigns.post('/:id/launch', async (c) => {
     RETURNING *
   `
   return c.json({ ...toApi(rows[0]), onchainTxHash: onchain.txHash, onchainCampaignId: onchain.campaignId })
+})
+// ─── POST /api/campaigns/seed ────────────────────────────────────────────────
+// Idempotent bootstrap: insert DB records for the three factory-seeded demo
+// campaigns (they were deployed by SeedCampaigns.s.sol, not the wizard, so the
+// DB had no record). Escrow/reward addresses are read LIVE from the factory by
+// on-chain campaign id; the salt/terms constants mirror the seed script.
+// Manual wizard launches keep working alongside these.
+const seedBody = z.object({
+  workflowId: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
+})
+
+campaigns.post('/seed', async (c) => {
+  let body: unknown = {}
+  try {
+    body = await c.req.json()
+  } catch {
+    /* empty body allowed */
+  }
+  const parsed = seedBody.safeParse(body)
+  if (!parsed.success) {
+    return c.json({ error: 'Validation failed', issues: parsed.error.flatten() }, 400)
+  }
+
+  let deployment: Awaited<ReturnType<typeof loadDeployment>>
+  try {
+    deployment = await loadDeployment()
+  } catch (err) {
+    return c.json({ error: `Deployment config unavailable: ${(err as Error).message}` }, 503)
+  }
+
+  const { createPublicClient, http, parseAbi } = await import('viem')
+  const { baseSepolia } = await import('viem/chains')
+  const client = createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com') })
+  const factoryAbi = parseAbi(['function campaigns(uint256) view returns (address escrow, address reward, uint256 rewardTokenId, uint64 start, uint64 end)'])
+
+  const seeded: number[] = []
+  for (const spec of SEED_CAMPAIGNS) {
+    // Already in the DB (by seed salt OR seeded name) -> skip. Two guards
+    // because the UI fires /seed on every page load and mounts can race.
+    const existing = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE salt = ${spec.salt} OR name = ${spec.name}`
+    if (existing.length > 0) continue
+
+    // Read the live escrow/reward from the factory for this campaign id.
+    let escrow: Address | null = null
+    let reward: Address | null = null
+    try {
+      const entry = await client.readContract({
+        address: deployment.factory,
+        abi: factoryAbi,
+        functionName: 'campaigns',
+        args: [BigInt(spec.campaignId)],
+      })
+      escrow = entry[0]
+      reward = entry[1]
+    } catch {
+      // Factory read failed - still insert the record so the UI can show it;
+      // addresses stay null and the detail page will surface the RPC error.
+    }
+
+    await sql`
+      INSERT INTO campaigns (
+        name, status, reward_type, mechanics, terms, rules,
+        fee_split_bps, company_a, company_b, company_a_name, company_b_name,
+        operating_deposit, salt, escrow_address, reward_address, launched_at
+      ) VALUES (
+        ${spec.name}, 'launched', 'monetary',
+        ${asJson(spec.mechanics)}, ${asJson({ ...spec.terms, onchainCampaignId: spec.campaignId })}, ${asJson(spec.rules)},
+        2500, ${SEED_COMPANY_A}, ${SEED_COMPANY_B}, 'Acme Coffee', 'Globex Books',
+        ${MIN_OPERATING_WEI.toString()}, ${spec.salt}, ${escrow}, ${reward}, NOW()
+      )
+    `
+    seeded.push(spec.campaignId)
+  }
+
+  return c.json({ seeded, alreadyPresent: SEED_CAMPAIGNS.length - seeded.length })
+})
+
+// ─── GET /api/campaigns/:id/onchain - live escrow state for the detail page ──
+campaigns.get('/:id/onchain', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: 'Invalid id' }, 400)
+  }
+  const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
+  if (rows.length === 0) {
+    return c.json({ error: 'Not found' }, 404)
+  }
+  const row = rows[0]
+  if (row.status !== 'launched' || !row.escrow_address) {
+    return c.json({ error: 'Campaign has no on-chain escrow' }, 404)
+  }
+  try {
+    const state = await loadEscrowState(row.escrow_address as Address)
+    return c.json(state)
+  } catch (err) {
+    return c.json({ error: `On-chain read failed: ${(err as Error).message}` }, 502)
+  }
+})
+
+// ─── GET /api/campaigns/:id/test-payload - the hardcoded demo payload ────────
+campaigns.get('/:id/test-payload', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: 'Invalid id' }, 400)
+  }
+  // Seeded campaigns use their curated payload; any other launched campaign
+  // gets a generic pass payload ($30, above the usual $10 min spend).
+  // Seeded rows carry their on-chain factory id in terms.onchainCampaignId.
+  const rowForCurated = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
+  if (rowForCurated.length > 0) {
+    const terms = rowForCurated[0].terms as { onchainCampaignId?: number }
+    const onchainId = terms?.onchainCampaignId
+    if (onchainId && SEED_TEST_PAYLOADS[onchainId]) {
+      return c.json(SEED_TEST_PAYLOADS[onchainId])
+    }
+  }
+  const curated = SEED_TEST_PAYLOADS[id]
+  if (curated) return c.json(curated)
+  const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
+  if (rows.length === 0) return c.json({ error: 'Not found' }, 404)
+  return c.json({
+    payload: {
+      campaignId: id,
+      userAnchor: '0xAAaA000000000000000000000000000000000001',
+      merchantId: 'wizard-ui',
+      amountSpent: 30,
+      timestamp: Math.floor(Date.now() / 1000),
+      earnedInWindow: 0,
+      items: ['demo-purchase'],
+    },
+    description:
+      'Generic $30 demo purchase for a wizard-launched campaign - the workflow reads terms live from the factory using the factory campaign id. Note: the payload campaignId must be the ON-CHAIN factory id (returned as onchainCampaignId at launch), not the DB row id.',
+  })
+})
+
+// ─── POST /api/campaigns/:id/payload - fire the CRE workflow via the relay ───
+// Wraps the signed-relay client (the same JWT path as backend/scripts/trigger.ts)
+// so the browser can submit a POS payload without holding keys.
+const payloadBody = z.object({
+  campaignId: z.number().int().nonnegative(),
+  userAnchor: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  merchantId: z.string().min(1),
+  amountSpent: z.number().nonnegative(),
+  timestamp: z.number().int().nonnegative(),
+  earnedInWindow: z.number().nonnegative().default(0),
+  items: z.array(z.string()).optional(),
+  workflowId: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
+})
+
+campaigns.post('/:id/payload', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: 'Invalid id' }, 400)
+  }
+  let body: unknown
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400)
+  }
+  const parsed = payloadBody.safeParse(body)
+  if (!parsed.success) {
+    return c.json({ error: 'Validation failed', issues: parsed.error.flatten() }, 400)
+  }
+
+  // Resolve the workflow id: request override -> root .env WORKFLOW_ID.
+  let workflowId = parsed.data.workflowId ?? null
+  if (!workflowId) {
+    const { readFileSync } = await import('node:fs')
+    try {
+      const envText = readFileSync(new URL('../../../.env', import.meta.url), 'utf8')
+      workflowId = envText.split('\n').find((l) => l.startsWith('WORKFLOW_ID='))?.split('=').slice(1).join('=').trim() ?? null
+    } catch {
+      /* no root .env */
+    }
+  }
+  if (!workflowId) {
+    return c.json({ error: 'No workflow id: pass workflowId in the body or set WORKFLOW_ID in root .env' }, 400)
+  }
+
+  const { campaignId, userAnchor, merchantId, amountSpent, timestamp, earnedInWindow, items } = parsed.data
+  const input: Record<string, unknown> = {
+    campaignId,
+    userAnchor,
+    merchantId,
+    amountSpent,
+    timestamp,
+    earnedInWindow,
+    ...(items ? { items } : {}),
+  }
+
+  try {
+    const result = await triggerWorkflow(input, workflowId)
+    if (result.httpStatus !== 200) {
+      return c.json({ error: 'Gateway rejected the trigger', gatewayStatus: result.httpStatus, response: result.response }, 502)
+    }
+    return c.json({
+      ok: true,
+      signer: result.signer,
+      executionId: result.executionId,
+      gatewayResponse: result.response,
+      note: result.executionId
+        ? 'ACCEPTED - the DON executes in ~10-30s; the on-chain claim (forwarder ReportProcessed + escrow Claim/mint) lands right after.'
+        : 'Gateway responded 200 without an execution id - check the response body.',
+    })
+  } catch (err) {
+    return c.json({ error: `Relay failed: ${(err as Error).message}` }, 502)
+  }
 })

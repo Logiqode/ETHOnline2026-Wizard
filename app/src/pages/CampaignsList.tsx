@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 interface Campaign {
   id: string
@@ -24,19 +25,32 @@ export default function CampaignsList() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [seeding, setSeeding] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+
     const load = async () => {
       try {
+        // Idempotent bootstrap: make sure the three factory-seeded demo
+        // campaigns exist in the DB before listing. Cheap when already seeded.
+        setSeeding(true)
+        await fetch(`${API}/api/campaigns/seed`, { method: 'POST' })
+        setSeeding(false)
+
         const res = await fetch(`${API}/api/campaigns`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = (await res.json()) as Campaign[]
-        if (!cancelled) setCampaigns(data)
+        // Only campaigns that are live on-chain (launched with an escrow).
+        const live = data.filter((c) => c.status === 'launched' && c.escrow_address)
+        if (!cancelled) setCampaigns(live)
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load campaigns')
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          setSeeding(false)
+        }
       }
     }
     load()
@@ -45,7 +59,13 @@ export default function CampaignsList() {
     }
   }, [])
 
-  if (loading) return <div className="page"><p>Loading campaigns…</p></div>
+  if (loading) {
+    return (
+      <div className="page">
+        <p>Loading campaigns{seeding ? ' (syncing seeded campaigns…)' : '…'}</p>
+      </div>
+    )
+  }
   if (error) return <div className="page"><p className="launch-error" role="alert">⚠️ {error}</p></div>
 
   return (
@@ -53,13 +73,14 @@ export default function CampaignsList() {
       <div className="page-header">
         <h1 className="page-title">Campaigns</h1>
         <p className="page-subtitle">
-          Campaigns launched from the wizard, backed by the local Postgres state.
+          Campaigns live on Base Sepolia — the factory-seeded demos plus anything launched from the wizard. Click a
+          campaign for its summary, balances, and test payloads.
         </p>
       </div>
 
       {campaigns.length === 0 ? (
         <div className="card">
-          <p className="card-desc">No campaigns yet — launch one from the <strong>Campaign Wizard</strong>.</p>
+          <p className="card-desc">No live campaigns yet — launch one from the <strong>Campaign Wizard</strong>.</p>
         </div>
       ) : (
         <div className="card">
@@ -79,12 +100,27 @@ export default function CampaignsList() {
               {campaigns.map((c) => (
                 <tr key={c.id}>
                   <td className="mono">{c.id}</td>
-                  <td>{c.name}</td>
+                  <td>
+                    <Link to={`/campaigns/${c.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>
+                      {c.name}
+                    </Link>
+                  </td>
                   <td><span className={`status status-${c.status}`}>{c.status}</span></td>
                   <td>{c.reward_type}</td>
                   <td className="mono">{(c.fee_split_bps / 100).toFixed(0)}%</td>
                   <td className="mono salt-cell">{c.salt ? `${c.salt.slice(0, 10)}…` : '—'}</td>
-                  <td className="mono">{c.escrow_address ? `${c.escrow_address.slice(0, 10)}…` : '—'}</td>
+                  <td className="mono">
+                    {c.escrow_address ? (
+                      <a
+                        href={`https://sepolia.basescan.org/address/${c.escrow_address}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: 'inherit' }}
+                      >
+                        {c.escrow_address.slice(0, 10)}…
+                      </a>
+                    ) : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>

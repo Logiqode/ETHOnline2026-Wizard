@@ -23575,7 +23575,8 @@ var onHTTPTrigger = (runtime2, payload) => {
   }
   const master = runtime2.getSecret({ id: "CAMPAIGN_NULLIFIER_MASTER" }).result().value;
   const request = requestSchema.parse(JSON.parse(Buffer.from(payload.input).toString("utf8")));
-  runtime2.log(`payload: campaign=${request.campaignId} user=${request.userAnchor} merchant=${request.merchantId}` + ` amount=${request.amountSpent} ts=${request.timestamp} earnedInWindow=${request.earnedInWindow}`);
+  const userAnchor = getAddress(request.userAnchor);
+  runtime2.log(`payload: campaign=${request.campaignId} user=${userAnchor} merchant=${request.merchantId}` + ` amount=${request.amountSpent} ts=${request.timestamp} earnedInWindow=${request.earnedInWindow}`);
   const evmClient = getEvmClient(config.chainName);
   const campaign = readCampaignOnChain(donRuntimeOf(runtime2), evmClient, request.campaignId);
   runtime2.log(`on-chain terms: escrow=${campaign.escrow} rateBps=${campaign.rateBps} window=[${campaign.start},${campaign.end}] minSpend=${campaign.minSpend} cap=${campaign.cap}`);
@@ -23586,7 +23587,7 @@ var onHTTPTrigger = (runtime2, payload) => {
     runtime2.log(`ineligible (${verdict.reason}) — no on-chain write`);
     return `REJECT points=0 reason=${verdict.reason}`;
   }
-  const reportPayload = encodeAbiParameters(parseAbiParameters("bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei"), [nullifier, request.userAnchor, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)]);
+  const reportPayload = encodeAbiParameters(parseAbiParameters("bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei"), [nullifier, userAnchor, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)]);
   const donRuntime = runtime2.usingTheDons();
   const reportResponse = donRuntime.report({
     encodedPayload: hexToBase64(reportPayload),

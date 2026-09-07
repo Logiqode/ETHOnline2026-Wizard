@@ -2,8 +2,7 @@ import { Routes, Route } from 'react-router-dom'
 import Navbar from './components/Navbar'
 import CampaignWizard from './pages/CampaignWizard'
 import CampaignsList from './pages/CampaignsList'
-import BrandAPos from './pages/BrandAPos'
-import BrandBRedeem from './pages/BrandBRedeem'
+import CampaignDetail from './pages/CampaignDetail'
 
 export default function App() {
   return (
@@ -12,8 +11,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<CampaignWizard />} />
         <Route path="/campaigns" element={<CampaignsList />} />
-        <Route path="/brand-a" element={<BrandAPos />} />
-        <Route path="/brand-b" element={<BrandBRedeem />} />
+        <Route path="/campaigns/:id" element={<CampaignDetail />} />
       </Routes>
     </>
   )

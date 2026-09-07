@@ -10,7 +10,7 @@ import {
 	type TeeRuntime,
 } from '@chainlink/cre-sdk'
 import { encodeCallMsg } from '@chainlink/cre-sdk'
-import { encodeAbiParameters, parseAbiParameters, encodeFunctionData, decodeFunctionResult, keccak256, concatHex, toHex, toBytes } from 'viem'
+import { encodeAbiParameters, parseAbiParameters, encodeFunctionData, decodeFunctionResult, keccak256, concatHex, toHex, toBytes, getAddress } from 'viem'
 import { z } from 'zod'
 
 // ─── Campaign terms (per campaign) ─────────────────────────────
@@ -346,8 +346,15 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 
 	// Parse the request body (decode the bytes input).
 	const request = requestSchema.parse(JSON.parse(Buffer.from(payload.input).toString('utf8')))
+	// viem enforces EIP-55 checksums downstream (encodeAbiParameters parses the
+	// recipient address and rejects non-checksummed input — "Address must match
+	// its checksum counterpart", Count: 10 = every DON node). Callers may send
+	// any casing, so normalize once here. Note: the nullifier is derived from
+	// the address BYTES (toHex is case-insensitive), so normalization never
+	// changes an already-recorded nullifier.
+	const userAnchor = getAddress(request.userAnchor)
 	runtime.log(
-		`payload: campaign=${request.campaignId} user=${request.userAnchor} merchant=${request.merchantId}` +
+		`payload: campaign=${request.campaignId} user=${userAnchor} merchant=${request.merchantId}` +
 			` amount=${request.amountSpent} ts=${request.timestamp} earnedInWindow=${request.earnedInWindow}`,
 	)
 
@@ -378,7 +385,7 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 	// report = abi.encode(nullifier, recipient, amountSpentWei, eligible, pointsWei).
 	const reportPayload = encodeAbiParameters(
 		parseAbiParameters('bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei'),
-		[nullifier, request.userAnchor as `0x${string}`, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)],
+		[nullifier, userAnchor, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)],
 	)
 
 	// Cross back to the DON for consensus (DON signs the report), then write it.

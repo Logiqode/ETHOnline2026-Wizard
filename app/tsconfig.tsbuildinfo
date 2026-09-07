@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/components/navbar.tsx","./src/lib/campaign.ts","./src/pages/brandapos.tsx","./src/pages/brandbredeem.tsx","./src/pages/campaignwizard.tsx","./src/pages/campaignslist.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/navbar.tsx","./src/lib/campaign.ts","./src/pages/campaigndetail.tsx","./src/pages/campaignwizard.tsx","./src/pages/campaignslist.tsx"],"version":"5.9.3"}

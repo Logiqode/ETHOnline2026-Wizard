@@ -3,8 +3,6 @@ import { NavLink } from 'react-router-dom'
 const PAGES = [
   { to: '/', label: 'Campaign Wizard', end: true },
   { to: '/campaigns', label: 'Campaigns' },
-  { to: '/brand-a', label: 'Brand A — POS' },
-  { to: '/brand-b', label: 'Brand B — Redeem' },
 ]
 
 export default function Navbar() {
