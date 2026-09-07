@@ -16,6 +16,7 @@ library CampaignRulesLib {
     error BelowMinSpend(uint256 minSpend, uint256 amountSpent);
     error CapExceeded(uint256 alreadyEarned, uint256 raw, uint256 cap);
     error NotAllowedDay(uint8 dayIndex, uint8 daysOfWeek);
+    error CampaignCapExhausted(uint256 campaignEarned, uint256 campaignCap);
 
     /*//////////////////////////////////////////////////////////////
                                 STRUCT
@@ -37,6 +38,8 @@ library CampaignRulesLib {
         uint8  capWindowCount;   // window spans N periods ("every 2 weeks" → capWindow 2, count 2); ignored for lifetime
         uint16 capWindowTime;    // seconds past midnight UTC for the reset instant (e.g. 16200 = 04:30 UTC); 0 = midnight
         uint8  capWindowDow;     // week-window anchor weekday: 0 = Monday .. 6 = Sunday (only read when capWindow = 2); 0 = Monday
+        bool   campaignCapEnabled; // campaign-wide cap on TOTAL rewards issued across ALL users (lifetime, never resets)
+        uint256 campaignCap;     // campaign-wide issuance cap (18-decimals reward units)
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -123,25 +126,38 @@ library CampaignRulesLib {
         return era * 146_097 + doe - 719_468;
     }
 
-    /// @notice Compute reward points, applying the per-user cap only if the rule is on.
+    /// @notice Compute reward points, applying caps if their rules are on.
     ///         Two mechanics: flat (flatEnabled → flatValue per purchase) and percent
     ///         (rateBps% of spend). For non-redeemable campaigns (discount) "points"
     ///         are dollars saved — they accumulate in totalBalance only.
-    /// @return points Reward to mint. Uncapped when capEnabled is false.
+    ///         Clamp order (mirrored EXACTLY by the workflow's TS evaluate()):
+    ///         per-tx first (independent of ledger state) → per-user cap →
+    ///         campaign-wide cap. Tightest wins; each stage claims as much of
+    ///         the remaining allowance as possible. Reverts only when nothing
+    ///         remains.
+    /// @return points Reward to mint. Uncapped when no cap rule is on.
     function computePoints(
         Rules memory r,
         uint256 rateBps,
         uint256 amountSpent,
-        uint256 alreadyEarned
+        uint256 alreadyEarned,
+        uint256 campaignAlreadyEarned
     ) internal pure returns (uint256 points) {
         points = r.flatEnabled ? r.flatValue : (rateBps * amountSpent) / 10_000;
-        // Per-transaction cap first (independent of ledger state), then the
-        // per-user lifetime cap. Tightest wins.
+        // Per-transaction cap first (independent of ledger state).
         if (r.perTxCapEnabled && points > r.perTxCap) points = r.perTxCap;
-        if (!r.capEnabled) return points;
-        uint256 remaining = r.cap - alreadyEarned;
-        points = points > remaining ? remaining : points;
-        if (points == 0) revert CapExceeded(alreadyEarned, points, r.cap);
+        // Per-user cap (window-aware: alreadyEarned is earned in the CURRENT window).
+        if (r.capEnabled) {
+            uint256 remaining = r.cap - alreadyEarned;
+            points = points > remaining ? remaining : points;
+            if (points == 0) revert CapExceeded(alreadyEarned, points, r.cap);
+        }
+        // Campaign-wide cap (lifetime, all users combined).
+        if (r.campaignCapEnabled) {
+            uint256 remaining = r.campaignCap - campaignAlreadyEarned;
+            points = points > remaining ? remaining : points;
+            if (points == 0) revert CampaignCapExhausted(campaignAlreadyEarned, r.campaignCap);
+        }
     }
 
     /// @notice Day-of-week gate. Returns true if the rule is off, or the timestamp's

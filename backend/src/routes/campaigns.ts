@@ -199,7 +199,12 @@ campaigns.post('/:id/launch', async (c) => {
   const rules = row.rules as { ruleStates?: Record<string, string>; ruleValues?: Record<string, string | number> }
   const rs = rules?.ruleStates ?? {}
   const rvals = rules?.ruleValues ?? {}
-  const t = row.terms as { start?: string; end?: string; noEndDate?: boolean }
+  const t = row.terms as { start?: string; end?: string; noEndDate?: boolean; totalRedeemCap?: number; redeemCapEnabled?: boolean }
+
+  // Campaign-wide cap (wizard "Total redeem cap" toggle): earn-side, lifetime,
+  // ALL users combined — enforced on-chain via the escrow's campaignTotalEarned.
+  const redeemCapOn = t?.redeemCapEnabled === true || t?.redeemCapEnabled === undefined // default ON (wizard default)
+  const totalRedeemCap = Number(t?.totalRedeemCap ?? 0)
 
   const startUnix = t?.start ? Math.floor(new Date(t.start).getTime() / 1000) : 0
   // "No end date" maps to a far-future end (the wizard uses 7026-12-31 for this).
@@ -273,6 +278,11 @@ campaigns.post('/:id/launch', async (c) => {
         capWindowCount: windowKind > 0 ? capCount : 0,
         capWindowTime,
         capWindowDow,
+        // Campaign-wide cap: the wizard's "Total redeem cap" toggle. Earn-side,
+        // lifetime, ALL users combined — enforced in the escrow via
+        // campaignTotalEarned. The value is terms.totalRedeemCap (USD).
+        campaignCapEnabled: redeemCapOn && totalRedeemCap > 0,
+        campaignCapWei: redeemCapOn ? usdToWei(totalRedeemCap) : 0n,
       },
       // The DON stamps the CRE *registry* owner (workflow deployer EOA) into
       // report metadata; the escrow's reportOwner must match or onReport

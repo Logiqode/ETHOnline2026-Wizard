@@ -12,7 +12,7 @@ import { join } from 'node:path'
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com'
 
 export const factoryAbi = parseAbi([
-  'function createCampaign((uint256 rateBps, uint64 start, uint64 end, address reward, uint256 rewardTokenId, (bool minSpendEnabled, uint256 minSpend, bool capEnabled, uint256 cap, bool dayOfWeekEnabled, uint8 daysOfWeek, bool flatEnabled, uint256 flatValue, bool redeemable, bool perTxCapEnabled, uint256 perTxCap, uint8 capWindow, uint8 capWindowCount, uint16 capWindowTime, uint8 capWindowDow) rules, uint256 platformFeeBps, address platformFeeAccount) terms, address workflowOwner, address reportOwner, string rewardUri, bytes32 salt, address companyA, address companyB, uint256 feeSplitBps) returns (uint256 campaignId)',
+  'function createCampaign((uint256 rateBps, uint64 start, uint64 end, address reward, uint256 rewardTokenId, (bool minSpendEnabled, uint256 minSpend, bool capEnabled, uint256 cap, bool dayOfWeekEnabled, uint8 daysOfWeek, bool flatEnabled, uint256 flatValue, bool redeemable, bool perTxCapEnabled, uint256 perTxCap, uint8 capWindow, uint8 capWindowCount, uint16 capWindowTime, uint8 capWindowDow, bool campaignCapEnabled, uint256 campaignCap) rules, uint256 platformFeeBps, address platformFeeAccount) terms, address workflowOwner, address reportOwner, string rewardUri, bytes32 salt, address companyA, address companyB, uint256 feeSplitBps) returns (uint256 campaignId)',
   'function campaigns(uint256) view returns (address escrow, address reward, uint256 rewardTokenId, uint64 start, uint64 end)',
   'function nextCampaignId() view returns (uint256)',
   'function MIN_OPERATING_DEPOSIT() view returns (uint256)',
@@ -58,6 +58,8 @@ export interface TermsInput {
   capWindowCount: number // N intervals: every 2 weeks → 2 (with capWindow=2), every 6 months → 6 (capWindow=3)
   capWindowTime: number  // seconds past midnight UTC for the reset instant (04:30 → 16200); 0 = midnight
   capWindowDow: number   // week anchor weekday: 0=Mon..6=Sun (only read when capWindow=2); 0 = Monday
+  campaignCapEnabled: boolean // campaign-wide cap on TOTAL rewards issued across all users (lifetime)
+  campaignCapWei: bigint // campaign-wide issuance cap (18-decimals reward units)
 }
 
 export interface CreateCampaignArgs {
@@ -131,6 +133,8 @@ export async function createCampaignOnChain(args: CreateCampaignArgs): Promise<C
       capWindowCount: t.capWindowCount,
       capWindowTime: t.capWindowTime,
       capWindowDow: t.capWindowDow,
+      campaignCapEnabled: t.campaignCapEnabled,
+      campaignCap: t.campaignCapWei,
     },
     platformFeeBps: 0n,
     platformFeeAccount: '0x0000000000000000000000000000000000000000' as Address,

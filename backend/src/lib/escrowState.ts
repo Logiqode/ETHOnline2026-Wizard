@@ -12,7 +12,7 @@ const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.pu
 const escrowAbi = parseAbi([
   // Param order mirrors the CampaignTerms struct field order exactly
   // (rateBps, start, end, reward, rewardTokenId, rules, platformFeeBps, platformFeeAccount).
-  'function terms() view returns (uint256 rateBps, uint64 start, uint64 end, address reward, uint256 rewardTokenId, (bool minSpendEnabled, uint256 minSpend, bool capEnabled, uint256 cap, bool dayOfWeekEnabled, uint8 daysOfWeek, bool flatEnabled, uint256 flatValue, bool redeemable, bool perTxCapEnabled, uint256 perTxCap, uint8 capWindow, uint8 capWindowCount, uint16 capWindowTime, uint8 capWindowDow) rules, uint256 platformFeeBps, address platformFeeAccount)',
+  'function terms() view returns (uint256 rateBps, uint64 start, uint64 end, address reward, uint256 rewardTokenId, (bool minSpendEnabled, uint256 minSpend, bool capEnabled, uint256 cap, bool dayOfWeekEnabled, uint8 daysOfWeek, bool flatEnabled, uint256 flatValue, bool redeemable, bool perTxCapEnabled, uint256 perTxCap, uint8 capWindow, uint8 capWindowCount, uint16 capWindowTime, uint8 capWindowDow, bool campaignCapEnabled, uint256 campaignCap) rules, uint256 platformFeeBps, address platformFeeAccount)',
   'function campaignLedger(uint256, address) view returns (uint256 totalBalance, uint256 unspentBalance, uint256 originalBlock)',
   'function platformFeesAccrued() view returns (uint256)',
   'function forwarder() view returns (address)',
@@ -52,6 +52,8 @@ export interface EscrowState {
   capWindowCount: number // N intervals
   capWindowTime: number  // seconds past midnight UTC for the reset instant
   capWindowDow: number   // week anchor weekday: 0=Mon..6=Sun
+  campaignCapEnabled: boolean // campaign-wide cap on total rewards issued (lifetime)
+  campaignCapUsd: number
   dayOfWeekEnabled: boolean
   daysOfWeek: number
   flatEnabled: boolean
@@ -77,7 +79,7 @@ export async function loadEscrowState(escrow: Address): Promise<EscrowState> {
   const terms = await client.readContract({ address: escrow, abi: escrowAbi, functionName: 'terms' })
   const [rateBps, start, end, reward, rewardTokenId, rules, platformFeeBps, platformFeeAccount] = terms as readonly [
     bigint, bigint, bigint, Address, bigint,
-    { minSpendEnabled: boolean; minSpend: bigint; capEnabled: boolean; cap: bigint; dayOfWeekEnabled: boolean; daysOfWeek: number; flatEnabled: boolean; flatValue: bigint; redeemable: boolean; perTxCapEnabled: boolean; perTxCap: bigint; capWindow: number; capWindowCount: number; capWindowTime: number; capWindowDow: number },
+    { minSpendEnabled: boolean; minSpend: bigint; capEnabled: boolean; cap: bigint; dayOfWeekEnabled: boolean; daysOfWeek: number; flatEnabled: boolean; flatValue: bigint; redeemable: boolean; perTxCapEnabled: boolean; perTxCap: bigint; capWindow: number; capWindowCount: number; capWindowTime: number; capWindowDow: number; campaignCapEnabled: boolean; campaignCap: bigint },
     bigint, Address,
   ]
 
@@ -152,6 +154,8 @@ export async function loadEscrowState(escrow: Address): Promise<EscrowState> {
     capWindowCount: rules.capWindowCount,
     capWindowTime: rules.capWindowTime,
     capWindowDow: rules.capWindowDow,
+    campaignCapEnabled: rules.campaignCapEnabled,
+    campaignCapUsd: formatUsd(rules.campaignCap),
     dayOfWeekEnabled: rules.dayOfWeekEnabled,
     daysOfWeek: rules.daysOfWeek,
     flatEnabled: rules.flatEnabled,

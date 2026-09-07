@@ -57,7 +57,9 @@ contract CampaignWorkflowTest is Test {
                 capWindow: 0,
                 capWindowCount: 1,
             capWindowTime: 0,
-            capWindowDow: 0
+            capWindowDow: 0,
+            campaignCapEnabled: false,
+            campaignCap: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -215,7 +217,9 @@ contract CampaignWorkflowTest is Test {
                 capWindow: 0,
                 capWindowCount: 1,
             capWindowTime: 0,
-            capWindowDow: 0
+            capWindowDow: 0,
+            campaignCapEnabled: false,
+            campaignCap: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -230,7 +234,7 @@ contract CampaignWorkflowTest is Test {
         assertEq(p1, 50e18, "per-tx cap clamps 80 to 50");
 
         // Preview must mirror the same math (what the DON report is checked against).
-        assertEq(CampaignEscrow(esc).computePointsPreview(800e18, 50e18), 50e18, "preview clamps too");
+        assertEq(CampaignEscrow(esc).computePointsPreview(800e18, 50e18, CampaignEscrow(esc).campaignTotalEarned()), 50e18, "preview clamps too");
 
         // Exactly at the per-tx boundary: 10% of $500 = $50 → no clamp, full 50.
         uint256 p2 = CampaignEscrow(esc).claim(keccak256("tx-2"), customer, 500e18);
@@ -419,7 +423,9 @@ contract CampaignWorkflowTest is Test {
                 capWindow: capWindow,
                 capWindowCount: capWindowCount,
                 capWindowTime: 0,
-                capWindowDow: 0
+                capWindowDow: 0,
+                campaignCapEnabled: false,
+                campaignCap: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -459,7 +465,9 @@ contract CampaignWorkflowTest is Test {
                 capWindow: 0,
                 capWindowCount: 1,
             capWindowTime: 0,
-            capWindowDow: 0
+            capWindowDow: 0,
+            campaignCapEnabled: false,
+            campaignCap: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -778,7 +786,7 @@ contract CampaignWorkflowTest is Test {
         (address esc, , ) = _deployWithMechanics(true, 5e18, false, start, end);
 
         // computePointsPreview must mirror the flat mechanic off-chain too.
-        uint256 expected = CampaignEscrow(esc).computePointsPreview(30e18, 0);
+        uint256 expected = CampaignEscrow(esc).computePointsPreview(30e18, 0, CampaignEscrow(esc).campaignTotalEarned());
         assertEq(expected, 5e18, "discount: preview uses flatValue");
 
         bytes32 nf = keccak256("d-report-1");
@@ -1165,7 +1173,9 @@ function test_SetReportOwnerHandover() public {
             capWindow: 2,
             capWindowCount: 2,
             capWindowTime: 0,
-            capWindowDow: 0
+            capWindowDow: 0,
+            campaignCapEnabled: false,
+            campaignCap: 0
         }));
         vm.startPrank(workflowOwner);
         // 2-week blocks anchor at Mon 2026-08-31 (block [08-31 .. 09-13]).
@@ -1198,7 +1208,9 @@ function test_SetReportOwnerHandover() public {
             capWindow: 2,
             capWindowCount: 1,
             capWindowTime: 0,
-            capWindowDow: 0
+            capWindowDow: 0,
+            campaignCapEnabled: false,
+            campaignCap: 0
         }));
         vm.startPrank(workflowOwner);
         vm.warp(1788800000); // Tue 2026-09-08, inside Mon-anchored week
@@ -1225,7 +1237,9 @@ function test_SetReportOwnerHandover() public {
             capWindow: 1,
             capWindowCount: 1,
             capWindowTime: 0,
-            capWindowDow: 0
+            capWindowDow: 0,
+            campaignCapEnabled: false,
+            campaignCap: 0
         }));
         vm.startPrank(workflowOwner);
         vm.warp(1788967800); // 2026-09-08 15:30 UTC
@@ -1249,7 +1263,9 @@ function test_SetReportOwnerHandover() public {
             capWindow: 2,
             capWindowCount: 1,
             capWindowTime: 0,
-            capWindowDow: 0
+            capWindowDow: 0,
+            campaignCapEnabled: false,
+            campaignCap: 0
         }));
         vm.startPrank(workflowOwner);
         vm.warp(1788800000);
@@ -1269,4 +1285,210 @@ function test_SetReportOwnerHandover() public {
         assertEq(CampaignEscrow(escrowAddr).lifetimeEarned(customer), 10e18);
     }
 
+    // ================================================================
+    //  CAMPAIGN-WIDE CAP (Rules.campaignCapEnabled / campaignCap): total
+    //  rewards issued across ALL users, lifetime, never resets. Clamp order
+    //  per-tx -> per-user -> campaign-wide; claim-as-much-as-possible at each
+    //  stage; revert only when nothing remains.
+    // ================================================================
+
+    /// @dev Deploy with a campaign-wide cap (other rules off) and return the escrow.
+    function _deployWithCampaignCap(uint256 campaignCap, bool redeemable) internal returns (address esc) {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
+            rateBps: RATE_BPS,
+            start: start,
+            end: end,
+            reward: address(0),
+            rewardTokenId: 0,
+            rules: CampaignRulesLib.Rules({
+                minSpendEnabled: false,
+                minSpend: 0,
+                capEnabled: false,
+                cap: 0,
+                dayOfWeekEnabled: false,
+                daysOfWeek: 0,
+                flatEnabled: false,
+                flatValue: 0,
+                redeemable: redeemable,
+                perTxCapEnabled: false,
+                perTxCap: 0,
+                capWindow: 0,
+                capWindowCount: 1,
+                capWindowTime: 0,
+                capWindowDow: 0,
+                campaignCapEnabled: true,
+                campaignCap: campaignCap
+            }),
+            platformFeeBps: PLATFORM_FEE_BPS,
+            platformFeeAccount: PLATFORM_FEE_ACCOUNT
+        });
+        uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", keccak256(abi.encodePacked(campaignCap, redeemable, block.timestamp)));
+        (esc, , , , ) = factory.campaigns(id);
+    }
+
+    /// @notice Cashback: two users fill a $100 campaign cap. User 2's final
+    ///         claim CLAMPS to the remainder (claim-as-much-as-possible), then
+    ///         the next claim reverts CampaignCapExhausted. Accumulator and
+    ///         preview must mirror the clamp exactly.
+    function test_CampaignCapClampsAndExhaustsCashback() public {
+        address esc = _deployWithCampaignCap(100e18, true);
+
+        // User 1: $800 spend -> 10% = $80 (under campaign cap) -> full 80.
+        vm.prank(workflowOwner);
+        assertEq(CampaignEscrow(esc).claim(keccak256("u1"), customer, 800e18), 80e18, "user1 earns 80");
+        assertEq(CampaignEscrow(esc).campaignTotalEarned(), 80e18, "accumulator tracks");
+
+        // User 2: $800 spend -> raw 80 but only 20 remains -> clamp to 20.
+        address u2 = address(0xB0B);
+        vm.prank(workflowOwner);
+        assertEq(CampaignEscrow(esc).claim(keccak256("u2"), u2, 800e18), 20e18, "clamped to remaining 20");
+        assertEq(CampaignEscrow(esc).campaignTotalEarned(), 100e18, "cap reached");
+
+        // Preview mirrors: zero remaining reverts CampaignCapExhausted (same
+        // semantics as the per-user cap's preview — a fully-exhausted cap has
+        // no valid points value to preview).
+        // (Hoist the accumulator read: an inline argument call would consume
+        // the expectRevert — expectRevert binds to the NEXT external call.)
+        uint256 earnedNow = CampaignEscrow(esc).campaignTotalEarned();
+        vm.expectRevert(abi.encodeWithSelector(CampaignRulesLib.CampaignCapExhausted.selector, 100e18, 100e18));
+        CampaignEscrow(esc).computePointsPreview(100e18, 0, earnedNow);
+
+        // User 3: any spend -> reverts CampaignCapExhausted (nothing remains).
+        vm.prank(workflowOwner);
+        vm.expectRevert(abi.encodeWithSelector(CampaignRulesLib.CampaignCapExhausted.selector, 100e18, 100e18));
+        CampaignEscrow(esc).claim(keccak256("u3"), address(0xCA7), 50e18);
+    }
+
+    /// @notice Discount (redeemable = false): campaign cap counts totalSaved
+    ///         too - proof-of-savings draws from the same campaign-wide pool.
+    function test_CampaignCapAppliesToDiscount() public {
+        address esc = _deployWithCampaignCap(30e18, false); // discount flavor
+
+        // User 1: $250 spend -> 10% saved = 25 (under 30 cap).
+        vm.prank(workflowOwner);
+        assertEq(CampaignEscrow(esc).claim(keccak256("d1"), customer, 250e18), 25e18, "discount earns 25");
+
+        // User 2: raw 25 but only 5 remains -> clamp to 5 (totalSaved = 30).
+        vm.prank(workflowOwner);
+        assertEq(CampaignEscrow(esc).claim(keccak256("d2"), address(0xB0B), 250e18), 5e18, "discount clamps to 5");
+        assertEq(CampaignEscrow(esc).campaignTotalEarned(), 30e18, "savings pool exhausted");
+
+        // Nothing minted (redeemable = false) but the cap still governs earns.
+        assertEq(CampaignEscrow(esc).lifetimeEarned(address(0xB0B)), 5e18, "totalSaved lineage");
+    }
+
+    /// @notice Clamp ORDER: per-tx cap applies FIRST, then per-user cap, then
+    ///         campaign-wide cap - each stage claims the remaining allowance.
+    function test_CampaignCapOrderingWithPerTxAndPerUser() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
+            rateBps: RATE_BPS,
+            start: start,
+            end: end,
+            reward: address(0),
+            rewardTokenId: 0,
+            rules: CampaignRulesLib.Rules({
+                minSpendEnabled: false,
+                minSpend: 0,
+                capEnabled: true,
+                cap: 60e18,        // per-user cap $60
+                dayOfWeekEnabled: false,
+                daysOfWeek: 0,
+                flatEnabled: false,
+                flatValue: 0,
+                redeemable: true,
+                perTxCapEnabled: true,
+                perTxCap: 40e18,   // per-tx cap $40
+                capWindow: 0,
+                capWindowCount: 1,
+                capWindowTime: 0,
+                capWindowDow: 0,
+                campaignCapEnabled: true,
+                campaignCap: 70e18 // campaign cap $70
+            }),
+            platformFeeBps: PLATFORM_FEE_BPS,
+            platformFeeAccount: PLATFORM_FEE_ACCOUNT
+        });
+        uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", keccak256("ordering"));
+        (address esc, , , , ) = factory.campaigns(id);
+
+        // Claim 1 (user1): raw 10% of $800 = 80 -> per-tx 40 (per-user fine at
+        // 0/60, campaign fine at 0/70) -> 40.
+        vm.prank(workflowOwner);
+        assertEq(CampaignEscrow(esc).claim(keccak256("o1"), customer, 800e18), 40e18, "per-tx wins first");
+
+        // Claim 2 (user1): raw 80 -> per-tx 40 -> per-user remaining 20 -> 20
+        // (campaign remaining 30, not binding). User now at 60/60.
+        vm.prank(workflowOwner);
+        assertEq(CampaignEscrow(esc).claim(keccak256("o2"), customer, 800e18), 20e18, "per-user clamps to 20");
+
+        // Claim 3 (user2): raw 80 -> per-tx 40 -> per-user fresh (0/60) -> 40 ->
+        // campaign remaining 70-60 = 10 -> clamp to 10. Pool now 70/70.
+        address u2 = address(0xB0B);
+        vm.prank(workflowOwner);
+        assertEq(CampaignEscrow(esc).claim(keccak256("o3"), u2, 800e18), 10e18, "campaign cap clamps last");
+
+        // Claim 4: nothing remains anywhere -> CampaignCapExhausted.
+        vm.prank(workflowOwner);
+        vm.expectRevert(abi.encodeWithSelector(CampaignRulesLib.CampaignCapExhausted.selector, 70e18, 70e18));
+        CampaignEscrow(esc).claim(keccak256("o4"), address(0xCA7), 100e18);
+    }
+
+    /// @notice Window interaction: the campaign cap is LIFETIME - a per-user
+    ///         window reset grants the USER fresh headroom but does NOT refill
+    ///         the campaign-wide pool.
+    function test_CampaignCapDoesNotResetWithWindow() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
+            rateBps: RATE_BPS,
+            start: start,
+            end: end,
+            reward: address(0),
+            rewardTokenId: 0,
+            rules: CampaignRulesLib.Rules({
+                minSpendEnabled: false,
+                minSpend: 0,
+                capEnabled: true,
+                cap: 100e18,
+                dayOfWeekEnabled: false,
+                daysOfWeek: 0,
+                flatEnabled: false,
+                flatValue: 0,
+                redeemable: true,
+                perTxCapEnabled: false,
+                perTxCap: 0,
+                capWindow: 1,        // daily reset (per-user)
+                capWindowCount: 1,
+                capWindowTime: 0,
+                capWindowDow: 0,
+                campaignCapEnabled: true,
+                campaignCap: 25e18   // tiny campaign pool
+            }),
+            platformFeeBps: PLATFORM_FEE_BPS,
+            platformFeeAccount: PLATFORM_FEE_ACCOUNT
+        });
+        uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", keccak256("win-cap"));
+        (address esc, , , , ) = factory.campaigns(id);
+
+        // Day 1: user earns 20 (of 25 pool).
+        vm.prank(workflowOwner);
+        assertEq(CampaignEscrow(esc).claim(keccak256("w1"), customer, 200e18), 20e18, "day1 earn");
+
+        // Warp past midnight -> user's window resets (fresh per-user headroom),
+        // but only 5 remains campaign-wide -> clamp to 5, pool exhausted.
+        vm.warp(block.timestamp + 1 days + 1);
+        vm.prank(workflowOwner);
+        assertEq(CampaignEscrow(esc).claim(keccak256("w2"), customer, 500e18), 5e18, "window reset does NOT refill campaign pool");
+        assertEq(CampaignEscrow(esc).campaignTotalEarned(), 25e18, "pool done");
+
+        // Next day, user has per-user room again but the campaign is dry.
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(workflowOwner);
+        vm.expectRevert(abi.encodeWithSelector(CampaignRulesLib.CampaignCapExhausted.selector, 25e18, 25e18));
+        CampaignEscrow(esc).claim(keccak256("w3"), customer, 100e18);
+    }
 }

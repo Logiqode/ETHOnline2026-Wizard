@@ -93,6 +93,32 @@ describe('evaluate — cashback math + per-user cap', () => {
 	})
 })
 
+describe('evaluate — campaign-wide cap', () => {
+	test('clamps to campaign-wide remaining (all users, lifetime)', () => {
+		const c = { ...base, campaignCapEnabled: true, campaignCap: 100 }
+		// raw 10, campaign pool 100-95=5 remaining → clamp to 5
+		expect(evaluate(req(100), c, 95).points).toBe(5)
+		// untouched pool → full 10
+		expect(evaluate(req(100), c, 0).points).toBe(10)
+	})
+
+	test('exhausted campaign pool rejects even with per-user headroom', () => {
+		const c = { ...base, campaignCapEnabled: true, campaignCap: 100 }
+		expect(evaluate(req(100), c, 100).reason).toBe('cap-exhausted')
+	})
+
+	test('applies AFTER per-user cap (clamp order per-tx → user → campaign)', () => {
+		// raw 10% of 800 = 80 → per-tx 40 → per-user remaining 20 → campaign remaining 10 → 10
+		const c = { ...base, capEnabled: true, cap: 60, perTxCapEnabled: true, perTxCap: 40, campaignCapEnabled: true, campaignCap: 70 }
+		expect(evaluate({ ...req(800), earnedInWindow: 40 }, c, 60).points).toBe(10)
+	})
+
+	test('off (campaignCapEnabled: false) → no clamp, even with huge earned', () => {
+		const c = { ...base, campaignCapEnabled: false, campaignCap: 0 }
+		expect(evaluate(req(100), c, 999_999).points).toBe(10)
+	})
+})
+
 describe('evaluate — day-of-week gate', () => {
 	// ts is day index 3 (Thursday). Bit 3 = allowed.
 	const tueThu = { ...base, dayOfWeekEnabled: true, daysOfWeek: 0b0001010 }

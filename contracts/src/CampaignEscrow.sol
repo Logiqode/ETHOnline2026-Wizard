@@ -125,6 +125,13 @@ contract CampaignEscrow {
     ///         operating-fund model is testable without real settlement.
     uint256 public platformFeesAccrued;
 
+    /// @notice Campaign-wide lifetime rewards issued across ALL users. Backs the
+    ///         campaignCap rule (Rules.campaignCapEnabled / Rules.campaignCap):
+    ///         every claim's points — cashback minted or discount totalSaved —
+    ///         accumulates here, and computePoints clamps against the remaining
+    ///         allowance. Lifetime: never resets, window rules are per-user only.
+    uint256 public campaignTotalEarned;
+
     /*//////////////////////////////////////////////////////////////
                               INITIALIZER
     //////////////////////////////////////////////////////////////*/
@@ -246,7 +253,7 @@ contract CampaignEscrow {
         // the delivered pointsWei must match what the rules library computes for
         // (amountSpent, recipient's earned-in-current-cap-window). The enclave
         // cannot over-mint — including across a cap-window reset.
-        uint256 expected = this.computePointsPreview(amountSpentWei, _earnedForCap(recipient));
+        uint256 expected = this.computePointsPreview(amountSpentWei, _earnedForCap(recipient), campaignTotalEarned);
         if (pointsWei != expected) revert CampaignEscrow__InvalidReport();
 
         _claimInternalWithPoints(nullifier, recipient, amountSpentWei, pointsWei);
@@ -261,8 +268,8 @@ contract CampaignEscrow {
 
     /// @dev Points are computed by CampaignRulesLib (capped only if the cap rule is on).
     ///      Keep this view for off-chain reads of a raw claim.
-    function computePointsPreview(uint256 amountSpent, uint256 alreadyEarned) external view returns (uint256) {
-        return CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, alreadyEarned);
+    function computePointsPreview(uint256 amountSpent, uint256 alreadyEarned, uint256 campaignAlreadyEarned) external view returns (uint256) {
+        return CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, alreadyEarned, campaignAlreadyEarned);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -331,7 +338,7 @@ contract CampaignEscrow {
         // min-spend gate (reverts if under), then points (capped against the
         // CURRENT cap window, not lifetime — windowEarned rolls over).
         CampaignRulesLib.enforceMinSpend(terms.rules, amountSpent);
-        points = CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, _earnedForCap(recipient));
+        points = CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, _earnedForCap(recipient), campaignTotalEarned);
 
         _applyEarn(proof, nullifier, recipient, amountSpent, points);
     }
@@ -364,6 +371,11 @@ contract CampaignEscrow {
         // totalBalance always accumulates — for discount campaigns it IS the
         // product: a proof-of-savings counter (totalSaved), never spendable.
         proof.totalBalance += points;
+
+        // Campaign-wide issuance ledger (backs Rules.campaignCap): lifetime,
+        // all users, never resets. Discount campaigns count too — "total
+        // rewards issued" means points earned, not tokens minted.
+        campaignTotalEarned += points;
 
         // Cap-window accounting: if the current window has rolled over since
         // this wallet's last earn, restart the window accumulator. (Window

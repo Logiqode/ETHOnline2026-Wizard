@@ -116,7 +116,7 @@ export type Request = z.infer<typeof requestSchema>
 // The evaluator consumes on-chain terms (flat shape from readCampaignOnChain).
 type EvalCampaign = OnChainCampaign
 
-export function evaluate(request: Request, campaign: EvalCampaign): { eligible: boolean; points: number; reason: string } {
+export function evaluate(request: Request, campaign: EvalCampaign, campaignTotalEarned = 0): { eligible: boolean; points: number; reason: string } {
 	// 1. Date window
 	if (request.timestamp < campaign.start) {
 		return { eligible: false, points: 0, reason: 'before-campaign-start' }
@@ -166,6 +166,13 @@ export function evaluate(request: Request, campaign: EvalCampaign): { eligible: 
 			}
 		}
 		const remaining = campaign.cap - earnedInWindow
+		points = Math.min(points, Math.max(remaining, 0))
+	}
+	// Campaign-wide cap (LAST — same clamp order as CampaignRulesLib.computePoints):
+	// total rewards issued across ALL users, lifetime, never resets. The caller
+	// passes the escrow's campaignTotalEarned() ledger value (settlement law).
+	if (campaign.campaignCapEnabled) {
+		const remaining = campaign.campaignCap - campaignTotalEarned
 		points = Math.min(points, Math.max(remaining, 0))
 	}
 	if (points <= 0) {
@@ -231,7 +238,9 @@ const ESCROW_TERMS_ABI = [
 					{ name: 'capWindowCount', type: 'uint8' },
 					{ name: 'capWindowTime', type: 'uint16' },
 					{ name: 'capWindowDow', type: 'uint8' },
-					],
+					{ name: 'campaignCapEnabled', type: 'bool' },
+					{ name: 'campaignCap', type: 'uint256' },
+				],
 			},
 			{ name: 'platformFeeBps', type: 'uint256' },
 			{ name: 'platformFeeAccount', type: 'address' },
@@ -259,6 +268,8 @@ interface OnChainCampaign {
 	capWindowCount: number // N intervals (every 2 weeks → 2)
 	capWindowTime: number // seconds past midnight UTC for the reset instant
 	capWindowDow: number // week anchor weekday: 0=Mon..6=Sun
+	campaignCapEnabled: boolean // campaign-wide cap on TOTAL rewards issued across all users
+	campaignCap: number // reward units, lifetime (never resets)
 }
 
 // TS mirror of CampaignRulesLib.windowStart — MUST match the contract exactly,
@@ -367,6 +378,8 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 		capWindowCount: number
 		capWindowTime: number
 		capWindowDow: number
+		campaignCapEnabled: boolean
+		campaignCap: bigint
 	}
 	const rules: RulesShape = Array.isArray(rawRules)
 		? {
@@ -385,6 +398,8 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 				capWindowCount: rawRules[12] as number,
 				capWindowTime: rawRules[13] as number,
 				capWindowDow: rawRules[14] as number,
+				campaignCapEnabled: rawRules[15] as boolean,
+				campaignCap: rawRules[16] as bigint,
 			}
 		: (rawRules as RulesShape)
 	const { minSpendEnabled: minSpendOn, minSpend: minSpendWei, capEnabled: capOn, cap: capWei, dayOfWeekEnabled: dowOn, daysOfWeek: dowMask } = rules
@@ -411,7 +426,32 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 		capWindowCount: rules.capWindowCount,
 		capWindowTime: rules.capWindowTime,
 		capWindowDow: rules.capWindowDow,
+		campaignCapEnabled: rules.campaignCapEnabled,
+		campaignCap: rules.campaignCapEnabled ? usd(rules.campaignCap) : 0,
 	}
+}
+
+// Read the escrow's campaign-wide issuance ledger (backs the campaignCap rule).
+// Public getter, so the DON never trusts a caller-supplied earned figure.
+const ESCROW_TOTAL_EARNED_ABI = [
+	{
+		name: 'campaignTotalEarned',
+		type: 'function',
+		stateMutability: 'view',
+		inputs: [],
+		outputs: [{ name: '', type: 'uint256' }],
+	},
+] as const
+
+function readCampaignTotalEarned(runtime: Runtime<Config>, evmClient: ReturnType<typeof getEvmClient>, escrow: string): number {
+	const callData = encodeFunctionData({ abi: ESCROW_TOTAL_EARNED_ABI, functionName: 'campaignTotalEarned', args: [] })
+	const reply = evmClient
+		.callContract(runtime, {
+			call: encodeCallMsg({ from: '0x0000000000000000000000000000000000000000', to: escrow as `0x${string}`, data: callData }),
+		})
+		.result()
+	const earned = decodeCall<bigint>(ESCROW_TOTAL_EARNED_ABI, 'campaignTotalEarned', reply.data)
+	return Number(earned) / 1e18
 }
 
 // ─── Nullifier (master-salt derivation, enclave-only) ───────────
@@ -460,10 +500,19 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 	// Read this campaign's terms ON-CHAIN from the factory (workflow master).
 	const evmClient = getEvmClient(config.chainName)
 	const campaign = readCampaignOnChain(donRuntimeOf(runtime), evmClient, request.campaignId)
-	runtime.log(`on-chain terms: escrow=${campaign.escrow} rateBps=${campaign.rateBps} window=[${campaign.start},${campaign.end}] minSpend=${campaign.minSpend} cap=${campaign.cap}`)
+	runtime.log(`on-chain terms: escrow=${campaign.escrow} rateBps=${campaign.rateBps} window=[${campaign.start},${campaign.end}] minSpend=${campaign.minSpend} cap=${campaign.cap} campaignCap=${campaign.campaignCapEnabled ? campaign.campaignCap : 'none'}`)
+
+	// Campaign-wide issuance ledger: the DON reads it from the escrow instead
+	// of trusting any caller-supplied number (same two-layer philosophy as the
+	// per-user cap). Always 0 when the campaignCap rule is off (skip the read).
+	let campaignTotalEarned = 0
+	if (campaign.campaignCapEnabled) {
+		campaignTotalEarned = readCampaignTotalEarned(donRuntimeOf(runtime), evmClient, campaign.escrow)
+		runtime.log(`campaignTotalEarned=${campaignTotalEarned} of ${campaign.campaignCap}`)
+	}
 
 	// Evaluate eligibility inside the enclave.
-	const verdict = evaluate(request, campaign)
+	const verdict = evaluate(request, campaign, campaignTotalEarned)
 	runtime.log(`eligibility: ${verdict.reason} eligible=${verdict.eligible} points=${verdict.points}`)
 
 	// Nullifier derived from the Vault master secret (enclave-only). Timestamp

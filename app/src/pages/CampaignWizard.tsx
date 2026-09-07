@@ -258,7 +258,9 @@ export default function CampaignWizard() {
     const windowTime = windowKind > 0 && hmMatch ? Number(hmMatch[1]) * 3600 + Number(hmMatch[2]) * 60 : 0
     const dowNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     const windowDow = windowKind === 2 ? dowNames.indexOf(String(ruleValues.capResetWeekday ?? 'Monday')) : 0
-    rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${minSpendOnChain} cap=${capOnChain} perTxCap=${perTxCap ?? 'none'} discountPerTxCap=${discountPerTxCap ?? 'none'} capWindow=${windowKind} capWindowCount=${windowCount} capWindowTime=${windowTime} capWindowDow=${windowDow}`, mono: true })
+    // Campaign-wide cap lands on-chain regardless of the per-user cap rule —
+    // it's an independent toggle. 0 when the toggle is off.
+    rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${minSpendOnChain} cap=${capOnChain} perTxCap=${perTxCap ?? 'none'} discountPerTxCap=${discountPerTxCap ?? 'none'} capWindow=${windowKind} capWindowCount=${windowCount} capWindowTime=${windowTime} capWindowDow=${windowDow} campaignCap=${redeemCapEnabled ? terms.totalRedeemCap : 0}`, mono: true })
     return rows
   }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues, redeemCapEnabled, assetLabel, capUnit, capSuffix, launch])
 

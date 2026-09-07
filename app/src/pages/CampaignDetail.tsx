@@ -36,6 +36,8 @@ interface EscrowState {
   capWindowCount: number
   capWindowTime: number
   capWindowDow: number
+  campaignCapEnabled: boolean
+  campaignCapUsd: number
   dayOfWeekEnabled: boolean
   daysOfWeek: number
   flatEnabled: boolean
@@ -378,6 +380,10 @@ export default function CampaignDetail() {
             <div className="insight-row">
               <span className="insight-label">Per-user cap</span>
               <span className="insight-value">{onchain.capEnabled ? `$${onchain.capUsd.toFixed(2)}${describeCapWindow(onchain)}` : 'none'}</span>
+            </div>
+            <div className="insight-row">
+              <span className="insight-label">Campaign-wide cap</span>
+              <span className="insight-value">{onchain.campaignCapEnabled ? `$${onchain.campaignCapUsd.toFixed(2)} (all users, lifetime — never resets)` : 'none'}</span>
             </div>
             <div className="insight-row">
               <span className="insight-label">Day of week</span>
