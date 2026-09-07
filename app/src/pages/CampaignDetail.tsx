@@ -62,6 +62,15 @@ interface TestPayloadInfo {
   description: string
 }
 
+interface RedeemResult {
+  ok?: boolean
+  txHash?: string
+  user?: string
+  amount?: string
+  remaining?: string
+  error?: string
+}
+
 interface TriggerResult {
   ok?: boolean
   signer?: string
@@ -69,6 +78,15 @@ interface TriggerResult {
   note?: string
   error?: string
   gatewayResponse?: unknown
+  verdict?: {
+    status: 'SUCCESS' | 'FAILURE' | 'PENDING'
+    finishedAt: string | null
+    errors: { error: string; count: number }[]
+    logs: { node: string; timestamp: string; message: string }[]
+    points: number | null
+    eligible: boolean | null
+    reason: string | null
+  }
 }
 
 const WEI = 1e18
@@ -111,14 +129,26 @@ export default function CampaignDetail() {
   const [campaign, setCampaign] = useState<Campaign | null>(null)
   const [onchain, setOnchain] = useState<EscrowState | null>(null)
   const [onchainError, setOnchainError] = useState<string | null>(null)
-  const [testPayload, setTestPayload] = useState<TestPayloadInfo | null>(null)
+  const [testPayloads, setTestPayloads] = useState<TestPayloadInfo[]>([])
+  const [openPayload, setOpenPayload] = useState<number | null>(null) // which card's JSON is expanded
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Manual payload form
-  const [manual, setManual] = useState({ userAnchor: '0xAAaA000000000000000000000000000000000001', merchantId: 'burgera', amountSpent: '30' })
-  const [sending, setSending] = useState<'none' | 'test' | 'manual'>('none')
+  // Manual payload form — every field inputtable except campaignId (pinned to
+  // this campaign's on-chain id) and earnedInWindow (fetched live per anchor).
+  const [manual, setManual] = useState({
+    userAnchor: '0xAAaA000000000000000000000000000000000001',
+    merchantId: 'burgera',
+    amountSpent: '30',
+    date: '', // datetime-local string; empty = now
+    items: 'burger',
+    earnedInWindow: 'auto',
+  })
+  const [manualEarnedWindow, setManualEarnedWindow] = useState<number | null>(null) // live read for the anchor
+  const [sending, setSending] = useState<'none' | 'test' | 'manual' | 'redeem'>('none')
   const [result, setResult] = useState<TriggerResult | null>(null)
+  const [redeemForm, setRedeemForm] = useState({ user: '0xAAaA000000000000000000000000000000000001', amount: '1' })
+  const [redeemResult, setRedeemResult] = useState<RedeemResult | null>(null)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -140,7 +170,10 @@ export default function CampaignDetail() {
           const body = (await ocRes.json()) as { error?: string }
           setOnchainError(body.error ?? 'On-chain read failed')
         }
-        if (tpRes.ok) setTestPayload(await tpRes.json())
+        if (tpRes.ok) {
+          const body = (await tpRes.json()) as { payloads?: TestPayloadInfo[] }
+          setTestPayloads(body.payloads ?? [])
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load campaign')
@@ -153,33 +186,83 @@ export default function CampaignDetail() {
     load()
   }, [load])
 
-  const send = async (kind: 'test' | 'manual') => {
+  // Live earnedInWindow for the manual-form anchor: read the wallet's lifetime
+  // earned from the escrow whenever the anchor (or campaign) changes, so the
+  // auto mode submits the honest current value against the per-user cap.
+  useEffect(() => {
+    if (!onchain || !manual.userAnchor.match(/^0x[0-9a-fA-F]{40}$/)) return
+    let cancelled = false
+    fetch(`${API}/api/campaigns/${id}/onchain`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((state: EscrowState | null) => {
+        if (cancelled || !state) return
+        const p = state.participants.find((x) => x.address.toLowerCase() === manual.userAnchor.toLowerCase())
+        setManualEarnedWindow(p ? Number(p.totalBalance) / 1e18 : 0)
+      })
+      .catch(() => { /* keep last known */ })
+    return () => { cancelled = true }
+  }, [id, onchain, manual.userAnchor])
+
+  const send = async (kind: 'test' | 'manual', payloadIndex?: number) => {
     if (!id || !campaign) return
     setSending(kind)
     setResult(null)
     try {
-      const body =
-        kind === 'test' && testPayload
-          ? { ...testPayload.payload }
-          : {
-              campaignId: Number(testPayload?.payload.campaignId ?? id),
-              userAnchor: manual.userAnchor,
-              merchantId: manual.merchantId,
-              amountSpent: Number(manual.amountSpent),
-              timestamp: Math.floor(Date.now() / 1000),
-              earnedInWindow: 0,
-            }
-      const res = await fetch(`${API}/api/campaigns/${id}/payload`, {
+      let body: Record<string, unknown>
+      if (kind === 'test' && payloadIndex !== undefined && testPayloads[payloadIndex]) {
+        body = { ...testPayloads[payloadIndex].payload }
+      } else {
+        // Manual: date → unix timestamp (empty = now); earnedInWindow auto =
+        // the anchor's LIFETIME earned (the honest on-chain value — the seeded
+        // campaigns have lifetime caps; per-period reset is caller-side and
+        // the backend has no period config for wizard campaigns).
+        const ts = manual.date ? Math.floor(new Date(manual.date).getTime() / 1000) : Math.floor(Date.now() / 1000)
+        const earned = manual.earnedInWindow === 'auto' ? (manualEarnedWindow ?? 0) : Number(manual.earnedInWindow)
+        body = {
+          campaignId: Number(testPayloads[0]?.payload.campaignId ?? id),
+          userAnchor: manual.userAnchor,
+          merchantId: manual.merchantId,
+          amountSpent: Number(manual.amountSpent),
+          timestamp: ts,
+          earnedInWindow: earned,
+          ...(manual.items.trim() ? { items: manual.items.split(',').map((s) => s.trim()).filter(Boolean) } : {}),
+        }
+      }
+      const res = await fetch(`${API}/api/campaigns/${id}/payload?await=1`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
       const data = (await res.json()) as TriggerResult
       setResult(data)
-      // The claim may have landed — refresh the on-chain panel after a beat.
-      if (data.ok) setTimeout(load, 15000)
+      // The verdict await already covers the DON run; a success means the
+      // claim/mint is (or is about to be) on-chain — refresh once, shortly.
+      if (data.ok) setTimeout(load, 4000)
     } catch (e) {
       setResult({ error: e instanceof Error ? e.message : 'Request failed' })
+    } finally {
+      setSending('none')
+    }
+  }
+
+  const redeem = async () => {
+    if (!id || !campaign) return
+    setSending('redeem')
+    setRedeemResult(null)
+    try {
+      const res = await fetch(`${API}/api/campaigns/${id}/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user: redeemForm.user,
+          amount: Number(redeemForm.amount),
+        }),
+      })
+      const data = (await res.json()) as RedeemResult
+      setRedeemResult(data)
+      if (data.ok) setTimeout(load, 4000)
+    } catch (e) {
+      setRedeemResult({ error: e instanceof Error ? e.message : 'Request failed' })
     } finally {
       setSending('none')
     }
@@ -310,7 +393,7 @@ export default function CampaignDetail() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr>
-                    {['Wallet', onchain.redeemable ? 'Lifetime earned' : 'Total saved', onchain.redeemable ? 'Spendable' : null, 'Cap used', 'Claims', 'Spend volume', 'First block']
+                    {['Wallet', onchain.redeemable ? 'Lifetime earned' : 'Total saved', onchain.redeemable ? 'Spendable' : null, `Earned / ${onchain.capEnabled ? 'cap' : 'no cap'}`, 'Claims', 'Spend volume', 'First block']
                       .filter(Boolean)
                       .map((h) => (
                         <th key={h as string} style={thStyle}>{h}</th>
@@ -321,13 +404,19 @@ export default function CampaignDetail() {
                   {onchain.participants.map((p) => {
                     const total = Number(p.totalBalance) / WEI
                     const unspent = Number(p.unspentBalance) / WEI
-                    const capUsed = onchain.capEnabled ? `${Math.min(100, (total / onchain.capUsd) * 100).toFixed(0)}% of $${onchain.capUsd}` : 'no cap'
+                    // The on-chain cap is LIFETIME per-user (CampaignRulesLib has no
+                    // reset period — period resets are caller-side via earnedInWindow).
+                    // This column shows earned against that cap; campaigns with a
+                    // caller-enforced period reset expose it through the same ratio.
+                    const capCell = onchain.capEnabled
+                      ? `${total.toFixed(2)} / ${onchain.capUsd.toFixed(0)} (${Math.min(100, (total / onchain.capUsd) * 100).toFixed(0)}%)`
+                      : `${total.toFixed(2)} / ∞`
                     return (
                       <tr key={p.address}>
                         <td style={tdStyle}><span className="mono"><a href={explorer(p.address)} target="_blank" rel="noreferrer">{short(p.address)}</a></span></td>
                         <td style={tdStyle}><span className="mono">{total.toFixed(2)} {rv.cashbackToken ?? 'points'}</span></td>
                         {onchain.redeemable && <td style={tdStyle}><span className="mono">{unspent.toFixed(2)} {rv.cashbackToken ?? 'points'}</span></td>}
-                        <td style={tdStyle}>{capUsed}</td>
+                        <td style={tdStyle}><span className="mono">{capCell}</span></td>
                         <td style={tdStyle}>{p.claims}</td>
                         <td style={tdStyle}>${p.amountSpentUsd.toFixed(2)}</td>
                         <td style={tdStyle}><span className="mono">{p.originalBlock}</span></td>
@@ -423,21 +512,36 @@ export default function CampaignDetail() {
             and only the verdict + mint land on-chain. Claims take ~15–30s to settle.
           </div>
 
-          {testPayload && (
+          {testPayloads.length > 0 && (
             <div style={{ marginTop: 12, padding: 12, border: '1px solid #e3e8ee', borderRadius: 8 }}>
-              <div className="field-label">Hardcoded test payload</div>
-              <p className="field-hint" style={{ marginTop: 4 }}>{testPayload.description}</p>
-              <pre className="mono" style={{ fontSize: 12, background: '#f7f8f8', padding: 10, borderRadius: 6, overflowX: 'auto' }}>
-                {JSON.stringify(testPayload.payload, null, 2)}
-              </pre>
-              <button className="btn btn-primary" onClick={() => send('test')} disabled={sending !== 'none'}>
-                {sending === 'test' ? 'Sending…' : 'Send test payload'}
-              </button>
+              <div className="field-label">Test payloads <span className="field-hint" style={{ display: 'inline' }}>({testPayloads.length} curated cases — click a case to inspect its JSON)</span></div>
+              {testPayloads.map((tp, i) => (
+                <div key={i} style={{ marginTop: 8, padding: 10, border: '1px solid #eef1f4', borderRadius: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button
+                      onClick={() => setOpenPayload(openPayload === i ? null : i)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)', padding: 0 }}
+                      aria-expanded={openPayload === i}
+                    >
+                      {openPayload === i ? '▾' : '▸'}
+                    </button>
+                    <span style={{ flex: 1, fontSize: 13 }}>{tp.description}</span>
+                    <button className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 12 }} onClick={() => send('test', i)} disabled={sending !== 'none'}>
+                      {sending === 'test' ? '…' : 'Send'}
+                    </button>
+                  </div>
+                  {openPayload === i && (
+                    <pre className="mono" style={{ fontSize: 12, background: '#f7f8f8', padding: 10, borderRadius: 6, overflowX: 'auto', marginTop: 8 }}>
+                      {JSON.stringify(tp.payload, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 
           <div style={{ marginTop: 16, padding: 12, border: '1px solid #e3e8ee', borderRadius: 8 }}>
-            <div className="field-label">Manual payload</div>
+            <div className="field-label">Manual payload <span className="field-hint" style={{ display: 'inline' }}>(campaignId is pinned to this campaign; earnedInWindow defaults to the wallet's live earned balance)</span></div>
             <div className="grid-2" style={{ marginTop: 8 }}>
               <div className="field">
                 <label className="field-label">Customer wallet</label>
@@ -448,9 +552,33 @@ export default function CampaignDetail() {
                 <input className="input" value={manual.merchantId} onChange={(e) => setManual({ ...manual, merchantId: e.target.value })} />
               </div>
             </div>
-            <div className="field">
-              <label className="field-label">Amount (USD)</label>
-              <input className="input" type="number" min="0" value={manual.amountSpent} onChange={(e) => setManual({ ...manual, amountSpent: e.target.value })} />
+            <div className="grid-2">
+              <div className="field">
+                <label className="field-label">Amount (USD)</label>
+                <input className="input" type="number" min="0" value={manual.amountSpent} onChange={(e) => setManual({ ...manual, amountSpent: e.target.value })} />
+              </div>
+              <div className="field">
+                <label className="field-label">Purchase date <span className="field-hint" style={{ display: 'inline' }}>(blank = now)</span></label>
+                <input className="input" type="datetime-local" value={manual.date} onChange={(e) => setManual({ ...manual, date: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid-2">
+              <div className="field">
+                <label className="field-label">Items <span className="field-hint" style={{ display: 'inline' }}>(comma-separated)</span></label>
+                <input className="input" value={manual.items} onChange={(e) => setManual({ ...manual, items: e.target.value })} />
+              </div>
+              <div className="field">
+                <label className="field-label">earnedInWindow <span className="field-hint" style={{ display: 'inline' }}>(auto = wallet's live earned)</span></label>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <select className="input" style={{ width: 90 }} value={manual.earnedInWindow === 'auto' ? 'auto' : 'manual'} onChange={(e) => setManual({ ...manual, earnedInWindow: e.target.value === 'auto' ? 'auto' : String(manualEarnedWindow ?? 0) })}>
+                    <option value="auto">auto</option>
+                    <option value="manual">manual</option>
+                  </select>
+                  {manual.earnedInWindow !== 'auto' && (
+                    <input className="input" type="number" min="0" value={manual.earnedInWindow} onChange={(e) => setManual({ ...manual, earnedInWindow: e.target.value })} />
+                  )}
+                </div>
+              </div>
             </div>
             <button className="btn btn-primary" onClick={() => send('manual')} disabled={sending !== 'none'}>
               {sending === 'manual' ? 'Sending…' : 'Submit to confidential workflow'}
@@ -462,13 +590,94 @@ export default function CampaignDetail() {
               {result.ok ? (
                 <>
                   <div><strong>ACCEPTED</strong> by the gateway{result.executionId ? ` — execution ${result.executionId.slice(0, 18)}…` : ''}</div>
-                  <div className="field-hint" style={{ marginTop: 4 }}>{result.note}</div>
+                  {result.verdict && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+                      {result.verdict.status === 'SUCCESS' && (
+                        <div>
+                          <strong style={{ color: '#1b7a3d' }}>✅ DON verdict: SUCCESS</strong>
+                          <span className="field-hint" style={{ display: 'inline' }}> — approved by consensus, report written to the escrow{result.verdict.finishedAt ? ` at ${new Date(result.verdict.finishedAt).toLocaleTimeString()}` : ''}.</span>
+                        </div>
+                      )}
+                      {result.verdict.status === 'FAILURE' && (
+                        <div>
+                          <strong style={{ color: '#b3261e' }}>❌ DON verdict: FAILURE</strong>
+                          {result.verdict.errors.map((e, i) => (
+                            <div key={i} className="mono" style={{ fontSize: 12, marginTop: 4, whiteSpace: 'pre-wrap' }}>{e.error} <span className="field-hint">(×{e.count} nodes)</span></div>
+                          ))}
+                        </div>
+                      )}
+                      {result.verdict.status === 'PENDING' && (
+                        <div><strong>⏳ Still running</strong> <span className="field-hint" style={{ display: 'inline' }}>when the await window closed — check `cre execution status` shortly.</span></div>
+                      )}
+                      {result.verdict.points !== null && result.verdict.eligible !== null && (
+                        <div className="mono" style={{ marginTop: 6, fontSize: 13 }}>
+                          <strong>{result.verdict.eligible ? `+${result.verdict.points} ${rv.cashbackToken ?? 'points'}` : `0 ${rv.cashbackToken ?? 'points'} (ineligible)`}</strong>
+                          <span className="field-hint" style={{ display: 'inline' }}> — eligibility: {result.verdict.reason}</span>
+                        </div>
+                      )}
+                      {result.verdict.logs.length > 0 && (
+                        <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+                          {result.verdict.logs.map((l, i) => (
+                            <div key={i} className="mono">{l.message}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {!result.verdict && <div className="field-hint" style={{ marginTop: 4 }}>{result.note}</div>}
                 </>
               ) : (
                 <div><strong>Failed:</strong> {result.error}</div>
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Redeem (Company B path: spend a user's points) ───────────────── */}
+      {onchain && onchain.redeemable && (
+        <div className="card">
+          <div className="card-title">Redeem points</div>
+          <div className="card-desc">
+            Company B (merchant) spends a user's earned points — burns them from the spendable balance;
+            the lifetime ledger is preserved. Sent by the platform relay (the escrow's authorized redeemer).
+          </div>
+          <div className="grid-2" style={{ marginTop: 8 }}>
+            <div className="field">
+              <label className="field-label">Customer wallet</label>
+              <input className="input mono" value={redeemForm.user} onChange={(e) => setRedeemForm({ ...redeemForm, user: e.target.value })} />
+            </div>
+            <div className="field">
+              <label className="field-label">Amount ({rv.cashbackToken ?? 'points'})</label>
+              <input className="input" type="number" min="0" step="0.01" value={redeemForm.amount} onChange={(e) => setRedeemForm({ ...redeemForm, amount: e.target.value })} />
+            </div>
+          </div>
+          <button className="btn btn-primary" onClick={redeem} disabled={sending !== 'none'}>
+            {sending === 'redeem' ? 'Redeeming…' : 'Redeem'}
+          </button>
+          {redeemResult && (
+            <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: redeemResult.ok ? '#e3f2e9' : '#fdeceb' }}>
+              {redeemResult.ok ? (
+                <>
+                  <div><strong>Redeemed {redeemResult.amount} {rv.cashbackToken ?? 'points'} from {short(redeemResult.user ?? '')}</strong></div>
+                  <div className="field-hint" style={{ marginTop: 4 }}>
+                    Remaining spendable: <span className="mono">{redeemResult.remaining} {rv.cashbackToken ?? 'points'}</span> · tx <a className="mono" href={`https://sepolia.basescan.org/tx/${redeemResult.txHash}`} target="_blank" rel="noreferrer">{redeemResult.txHash?.slice(0, 18)}…</a>
+                  </div>
+                </>
+              ) : (
+                <div><strong>Failed:</strong> {redeemResult.error}</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {onchain && !onchain.redeemable && (
+        <div className="card">
+          <div className="card-title">Redeem points</div>
+          <p className="field-hint">
+            Not available — this is a discount (proof-of-savings) campaign: savings accumulate in the
+            totalSaved counter and are never spendable, so there is nothing to redeem.
+          </p>
         </div>
       )}
     </div>

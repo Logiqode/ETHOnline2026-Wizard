@@ -12,7 +12,9 @@ import {
 import { createCampaignOnChain, loadDeployment, usdToWei } from '../lib/onchain'
 import { loadEscrowState } from '../lib/escrowState'
 import { SEED_CAMPAIGNS, SEED_COMPANY_A, SEED_COMPANY_B, SEED_TEST_PAYLOADS } from '../lib/seedCampaigns'
-import { triggerWorkflow } from '../lib/relay'
+import { triggerWorkflow, loadRelayKey } from '../lib/relay'
+import { awaitExecutionVerdict } from '../lib/creExecution'
+import { getAddress } from 'viem'
 import type { Address, Hex } from 'viem'
 
 export const campaigns = new Hono()
@@ -354,39 +356,57 @@ campaigns.get('/:id/onchain', async (c) => {
   }
 })
 
-// ─── GET /api/campaigns/:id/test-payload - the hardcoded demo payload ────────
+// ─── GET /api/campaigns/:id/test-payload - the hardcoded demo payload set ────
+// Returns { payloads: SeedTestPayload[] } — an array of curated cases (pass /
+// reject / edge). Seeded campaigns get their set by on-chain campaign id;
+// wizard-launched campaigns get a generic set built from their terms.
 campaigns.get('/:id/test-payload', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) {
     return c.json({ error: 'Invalid id' }, 400)
   }
-  // Seeded campaigns use their curated payload; any other launched campaign
-  // gets a generic pass payload ($30, above the usual $10 min spend).
-  // Seeded rows carry their on-chain factory id in terms.onchainCampaignId.
-  const rowForCurated = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
-  if (rowForCurated.length > 0) {
-    const terms = rowForCurated[0].terms as { onchainCampaignId?: number }
-    const onchainId = terms?.onchainCampaignId
-    if (onchainId && SEED_TEST_PAYLOADS[onchainId]) {
-      return c.json(SEED_TEST_PAYLOADS[onchainId])
-    }
-  }
-  const curated = SEED_TEST_PAYLOADS[id]
-  if (curated) return c.json(curated)
   const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
   if (rows.length === 0) return c.json({ error: 'Not found' }, 404)
+  const row = rows[0]
+  const terms = row.terms as { onchainCampaignId?: number }
+  const onchainId = terms?.onchainCampaignId
+
+  // Seeded campaigns: their curated three-case set.
+  if (onchainId && SEED_TEST_PAYLOADS[onchainId]) {
+    return c.json({ payloads: SEED_TEST_PAYLOADS[onchainId] })
+  }
+
+  // Wizard-launched: generic set shaped by the campaign's own min spend.
+  const rules = row.rules as { minSpend?: number } | null
+  const minSpend = Number(rules?.minSpend ?? 10)
+  const anchor = '0xAAaA000000000000000000000000000000000001'
   return c.json({
-    payload: {
-      campaignId: id,
-      userAnchor: '0xAAaA000000000000000000000000000000000001',
-      merchantId: 'wizard-ui',
-      amountSpent: 30,
-      timestamp: Math.floor(Date.now() / 1000),
-      earnedInWindow: 0,
-      items: ['demo-purchase'],
-    },
-    description:
-      'Generic $30 demo purchase for a wizard-launched campaign - the workflow reads terms live from the factory using the factory campaign id. Note: the payload campaignId must be the ON-CHAIN factory id (returned as onchainCampaignId at launch), not the DB row id.',
+    payloads: [
+      {
+        payload: {
+          campaignId: onchainId ?? id,
+          userAnchor: anchor,
+          merchantId: 'wizard-ui',
+          amountSpent: Math.max(minSpend + 20, 30),
+          timestamp: Math.floor(Date.now() / 1000),
+          earnedInWindow: 0,
+          items: ['demo-purchase'],
+        },
+        description: `PASS — purchase above the $${minSpend} min spend; reward computed from the campaign's on-chain terms.`,
+      },
+      {
+        payload: {
+          campaignId: onchainId ?? id,
+          userAnchor: '0xAAaA000000000000000000000000000000000002',
+          merchantId: 'wizard-ui',
+          amountSpent: Math.max(minSpend - 5, 1),
+          timestamp: Math.floor(Date.now() / 1000),
+          earnedInWindow: 0,
+          items: ['demo-purchase'],
+        },
+        description: `REJECT (below-min-spend) — under the $${minSpend} minimum; eligible=false, no on-chain write.`,
+      },
+    ],
   })
 })
 
@@ -451,6 +471,27 @@ campaigns.post('/:id/payload', async (c) => {
     if (result.httpStatus !== 200) {
       return c.json({ error: 'Gateway rejected the trigger', gatewayStatus: result.httpStatus, response: result.response }, 502)
     }
+
+    // Optional verdict await: `?await=1` polls the CRE CLI until the execution
+    // finishes (~10-15s typical) and returns the DON's verdict + user logs so
+    // the UI can show instant feedback instead of "check back in 15s".
+    const wantsVerdict = c.req.query('await') === '1'
+    if (wantsVerdict && result.executionId) {
+      const verdict = await awaitExecutionVerdict(result.executionId)
+      return c.json({
+        ok: true,
+        signer: result.signer,
+        executionId: result.executionId,
+        gatewayResponse: result.response,
+        verdict,
+        note: verdict.status === 'SUCCESS'
+          ? 'SUCCESS — the DON approved and wrote the report; the escrow claim/mint is on-chain (refresh to see the ledger).'
+          : verdict.status === 'FAILURE'
+            ? 'FAILURE — the DON rejected the execution; see verdict.errors / verdict.logs.'
+            : 'Still running when the await window closed — check `cre execution status` shortly.',
+      })
+    }
+
     return c.json({
       ok: true,
       signer: result.signer,
@@ -462,5 +503,91 @@ campaigns.post('/:id/payload', async (c) => {
     })
   } catch (err) {
     return c.json({ error: `Relay failed: ${(err as Error).message}` }, 502)
+  }
+})
+
+// ─── POST /api/campaigns/:id/redeem - spend a user's points (Company B path) ─
+// The backend relay signs with the workflowOwner EOA, which the escrow (gen-3
+// impl) authorizes as a redeemer alongside explicitly-granted merchant wallets.
+// Burns `amount` reward tokens from the user's spendable balance; the ledger's
+// totalBalance preserves lineage. Cashback campaigns only — discount escrows
+// keep unspentBalance at 0 by design, so any redeem reverts InsufficientBalance.
+const redeemBody = z.object({
+  user: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  amount: z.number().positive(),
+})
+
+campaigns.post('/:id/redeem', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: 'Invalid id' }, 400)
+  }
+  let body: unknown
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400)
+  }
+  const parsed = redeemBody.safeParse(body)
+  if (!parsed.success) {
+    return c.json({ error: 'Validation failed', issues: parsed.error.flatten() }, 400)
+  }
+
+  const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
+  if (rows.length === 0) return c.json({ error: 'Not found' }, 404)
+  const row = rows[0]
+  if (row.status !== 'launched' || !row.escrow_address) {
+    return c.json({ error: 'Campaign has no on-chain escrow' }, 404)
+  }
+
+  try {
+    const { createWalletClient, createPublicClient, http, parseAbi } = await import('viem')
+    const { baseSepolia } = await import('viem/chains')
+    const { privateKeyToAccount } = await import('viem/accounts')
+    const { loadEscrowState, DEMO_USER_ANCHOR } = await import('../lib/escrowState')
+
+    const escrow = row.escrow_address as Address
+    const state = await loadEscrowState(escrow)
+    if (!state.redeemable) {
+      return c.json({ error: 'Not redeemable — this is a discount (proof-of-savings) campaign; nothing is spendable.' }, 400)
+    }
+
+    const user = getAddress(parsed.data.user) as Address // normalize EIP-55 casing (relay-side)
+    const amountWei = BigInt(Math.round(parsed.data.amount * 1e18))
+
+    const account = privateKeyToAccount(loadRelayKey())
+    const wallet = createWalletClient({ account, chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com') })
+    const publicClient = createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com') })
+
+    const abi = parseAbi(['function redeemFor(address user, uint256 amount)'])
+    const hash = await wallet.writeContract({
+      address: escrow,
+      abi,
+      functionName: 'redeemFor',
+      args: [user, amountWei],
+    })
+    const receipt = await publicClient.waitForTransactionReceipt({ hash })
+    if (receipt.status !== 'success') throw new Error(`redeem tx reverted: ${hash}`)
+
+    // Read back the remaining spendable balance.
+    const after = await loadEscrowState(escrow)
+    const p = after.participants.find((x) => x.address.toLowerCase() === user.toLowerCase())
+    const remaining = p ? (Number(p.unspentBalance) / 1e18).toFixed(2) : null
+
+    return c.json({
+      ok: true,
+      txHash: hash,
+      user: user,
+      amount: parsed.data.amount.toFixed(2),
+      remaining,
+      note: `Redeemed ${parsed.data.amount.toFixed(2)} ${row.reward_type === 'monetary' ? 'points' : 'units'} — burned from the user's spendable balance (lifetime ledger unchanged).`,
+    })
+  } catch (err) {
+    const msg = (err as Error).message
+    // Surface the common reverts readably.
+    if (msg.includes('OnlyRedeemer')) return c.json({ error: 'The relay wallet is not an authorized redeemer on this escrow (pre-gen-3 deployment?)' }, 400)
+    if (msg.includes('InsufficientBalance')) return c.json({ error: 'Insufficient spendable balance for that user/amount' }, 400)
+    if (msg.includes('CampaignNotLive') || msg.includes('CampaignEnded')) return c.json({ error: 'Campaign is not live (outside its window)' }, 400)
+    return c.json({ error: `Redeem failed: ${msg}` }, 502)
   }
 })

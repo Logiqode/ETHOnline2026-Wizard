@@ -64,9 +64,11 @@ export const SEED_CAMPAIGNS: SeedCampaignSpec[] = [
   },
 ]
 
-// The hardcoded POS test payload per seeded campaign (mirror of
-// wizard/test-payloads/onchain-*-pass.json) + a human description of what it
-// exercises, shown on the campaign detail page.
+// The hardcoded POS test-payload SET per seeded campaign (mirror of
+// wizard/test-payloads/onchain-*.json) + a human description of what each
+// exercises, shown on the campaign detail page. The UI renders them as
+// collapsible cards (JSON hidden behind a show/hide toggle). Three payloads
+// per campaign: a pass, a below-min-spend rejection, and a cap-edge case.
 export interface SeedTestPayload {
   payload: {
     campaignId: number
@@ -80,45 +82,131 @@ export interface SeedTestPayload {
   description: string
 }
 
-// timestamp 1789000000 ≈ 2026-09-12 — inside every seeded campaign's window.
-export const SEED_TEST_PAYLOADS: Record<number, SeedTestPayload> = {
-  1: {
-    payload: {
-      campaignId: 1,
-      userAnchor: '0xAAaA000000000000000000000000000000000001',
-      merchantId: 'burgera',
-      amountSpent: 30,
-      timestamp: 1789000000,
-      earnedInWindow: 0,
-      items: ['burger'],
+// timestamp 1789000000 ≈ 2026-09-12 (a Saturday? no — epoch math puts it on a
+// Friday UTC) — inside every seeded campaign's window. Anchors are per-case so
+// the pass payload never collides with a previous run's nullifier.
+export const SEED_TEST_PAYLOADS: Record<number, SeedTestPayload[]> = {
+  1: [
+    {
+      payload: {
+        campaignId: 1,
+        userAnchor: '0xAAaA000000000000000000000000000000000001',
+        merchantId: 'burgera',
+        amountSpent: 30,
+        timestamp: 1789000000,
+        earnedInWindow: 0,
+        items: ['burger'],
+      },
+      description:
+        'PASS — $30 purchase → 10% cashback = 3 Bpoints (above the $10 min spend, 0 already earned against the $100 cap). Mints 3 redeemable points to 0xAAA…0001.',
     },
-    description:
-      '$30 purchase → 10% cashback = 3 Bpoints (above the $10 min spend, first claim so 0 already earned against the $100 cap). Mints 3 redeemable points to 0xAAA…0001.',
-  },
-  2: {
-    payload: {
-      campaignId: 2,
-      userAnchor: '0xAAaA000000000000000000000000000000000001',
-      merchantId: 'burgera',
-      amountSpent: 30,
-      timestamp: 1789000000,
-      earnedInWindow: 0,
-      items: ['burger'],
+    {
+      payload: {
+        campaignId: 1,
+        userAnchor: '0xAAaA000000000000000000000000000000000002',
+        merchantId: 'burgera',
+        amountSpent: 5,
+        timestamp: 1789000000,
+        earnedInWindow: 0,
+        items: ['fries'],
+      },
+      description:
+        'REJECT (below-min-spend) — $5 purchase is under the $10 minimum. The DON verdict will be SUCCESS with eligible=false, points=0, reason=below-min-spend (no on-chain write).',
     },
-    description:
-      '$30 purchase → flat $2 cashback (flat mechanic: every qualifying purchase earns exactly $2 regardless of spend, above the $10 min spend). Mints 2 redeemable points.',
-  },
-  3: {
-    payload: {
-      campaignId: 3,
-      userAnchor: '0xAAaA000000000000000000000000000000000001',
-      merchantId: 'burgera',
-      amountSpent: 30,
-      timestamp: 1789000000,
-      earnedInWindow: 0,
-      items: ['burger'],
+    {
+      payload: {
+        campaignId: 1,
+        userAnchor: '0xAAaA000000000000000000000000000000000003',
+        merchantId: 'burgera',
+        amountSpent: 980,
+        timestamp: 1789000000,
+        earnedInWindow: 2,
+        items: ['family-meal'],
+      },
+      description:
+        'CAP EDGE — $980 purchase would earn 98 Bpoints raw, but earnedInWindow=2 leaves only 98 of the $100 cap → clamped to exactly 98. Tests the cap clamp in the enclave.',
     },
-    description:
-      '$30 purchase → $5 discount saved (proof-of-savings: the $5 lands in the totalSaved counter, nothing is minted and nothing is redeemable — the ledger records proof of savings only).',
-  },
+  ],
+  2: [
+    {
+      payload: {
+        campaignId: 2,
+        userAnchor: '0xAAaA000000000000000000000000000000000001',
+        merchantId: 'burgera',
+        amountSpent: 30,
+        timestamp: 1789000000,
+        earnedInWindow: 0,
+        items: ['burger'],
+      },
+      description:
+        'PASS — flat mechanic: every qualifying purchase earns exactly $2 regardless of spend (above the $10 min spend). Mints 2 redeemable points.',
+    },
+    {
+      payload: {
+        campaignId: 2,
+        userAnchor: '0xAAaA000000000000000000000000000000000002',
+        merchantId: 'burgera',
+        amountSpent: 8,
+        timestamp: 1789000000,
+        earnedInWindow: 0,
+        items: ['drink'],
+      },
+      description:
+        'REJECT (below-min-spend) — $8 purchase is under the $10 minimum; flat $2 never applies below it.',
+    },
+    {
+      payload: {
+        campaignId: 2,
+        userAnchor: '0xAAaA000000000000000000000000000000000003',
+        merchantId: 'burgera',
+        amountSpent: 250,
+        timestamp: 1789000000,
+        earnedInWindow: 0,
+        items: ['catering'],
+      },
+      description:
+        'FLAT INVARIANCE — $250 purchase still earns exactly $2 (flat ignores spend size; no cap rule on this campaign so nothing clamps). Tests that the mechanic really is flat.',
+    },
+  ],
+  3: [
+    {
+      payload: {
+        campaignId: 3,
+        userAnchor: '0xAAaA000000000000000000000000000000000001',
+        merchantId: 'burgera',
+        amountSpent: 30,
+        timestamp: 1789000000,
+        earnedInWindow: 0,
+        items: ['burger'],
+      },
+      description:
+        'PASS — $30 purchase → $5 discount saved (proof-of-savings: the $5 lands in the totalSaved counter, nothing is minted, nothing redeemable).',
+    },
+    {
+      payload: {
+        campaignId: 3,
+        userAnchor: '0xAAaA000000000000000000000000000000000002',
+        merchantId: 'burgera',
+        amountSpent: 4,
+        timestamp: 1789000000,
+        earnedInWindow: 0,
+        items: ['napkin'],
+      },
+      description:
+        'REJECT (below-min-spend) — $4 purchase is under the $10 minimum; no savings recorded.',
+    },
+    {
+      payload: {
+        campaignId: 3,
+        userAnchor: '0xAAaA000000000000000000000000000000000003',
+        merchantId: 'burgera',
+        amountSpent: 60,
+        timestamp: 1789000000,
+        earnedInWindow: 0,
+        items: ['groceries'],
+      },
+      description:
+        'ACCUMULATION — second $60 purchase on the same anchor adds another $5 saved (flat per purchase); totalSaved grows 5 → 10 while unspentBalance stays 0 (not redeemable by design).',
+    },
+  ],
 }

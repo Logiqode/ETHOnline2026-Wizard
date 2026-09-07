@@ -392,6 +392,11 @@ contract CampaignEscrow {
     }
 
     function _onlyRedeemer() internal view {
+        // The CRE workflow-owner EOA (the platform relay) may always redeem:
+        // it's the platform-operated wallet the demo backend already holds, so
+        // the redeem path is testable end-to-end without a separate merchant
+        // key ceremony. Explicitly-granted merchant redeemers still work.
+        if (msg.sender == workflowOwner) return;
         if (!authorizedRedeemers[msg.sender]) revert CampaignEscrow__OnlyRedeemer(msg.sender);
     }
 
