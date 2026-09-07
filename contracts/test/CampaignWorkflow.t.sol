@@ -53,7 +53,10 @@ contract CampaignWorkflowTest is Test {
                 flatValue: 0,
                 redeemable: true,
                 perTxCapEnabled: false,
-                perTxCap: 0
+                perTxCap: 0,
+                capWindow: 0,
+                capWindowCount: 1,
+            capWindowTime: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -207,7 +210,10 @@ contract CampaignWorkflowTest is Test {
                 flatValue: 0,
                 redeemable: true,
                 perTxCapEnabled: true,
-                perTxCap: 50e18
+                perTxCap: 50e18,
+                capWindow: 0,
+                capWindowCount: 1,
+            capWindowTime: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -375,6 +381,21 @@ contract CampaignWorkflowTest is Test {
         uint64 start,
         uint64 end
     ) internal returns (address esc) {
+        return _deployWithRulesWindowed(minSpendOn, minSpend, capOn, cap, dayOn, daysOfWeek, start, end, 0, 1);
+    }
+
+    function _deployWithRulesWindowed(
+        bool minSpendOn,
+        uint256 minSpend,
+        bool capOn,
+        uint256 cap,
+        bool dayOn,
+        uint8 daysOfWeek,
+        uint64 start,
+        uint64 end,
+        uint8 capWindow,
+        uint8 capWindowCount
+    ) internal returns (address esc) {
         CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
             rateBps: RATE_BPS,
             start: start,
@@ -392,12 +413,16 @@ contract CampaignWorkflowTest is Test {
                 flatValue: 0,
                 redeemable: true,
                 perTxCapEnabled: false,
-                perTxCap: 0
+                perTxCap: 0,
+                capWindow: capWindow,
+                capWindowCount: capWindowCount,
+                capWindowTime: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
         });
-        uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", keccak256(abi.encodePacked(minSpendOn, capOn, dayOn, start, end, block.timestamp)));
+        bytes32 salt = keccak256(abi.encodePacked(minSpendOn, capOn, dayOn, start, end, block.timestamp));
+        uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", salt);
         (esc, , , , ) = factory.campaigns(id);
     }
 
@@ -427,7 +452,10 @@ contract CampaignWorkflowTest is Test {
                 flatValue: flatValue,
                 redeemable: redeemable,
                 perTxCapEnabled: false,
-                perTxCap: 0
+                perTxCap: 0,
+                capWindow: 0,
+                capWindowCount: 1,
+            capWindowTime: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -915,5 +943,249 @@ function test_SetReportOwnerHandover() public {
     CampaignEscrow(escrowAddr).onReport(_metadata(registryOwner), _report(nf, customer, 50e18, true, 5e18));
     assertEq(CampaignEscrow(escrowAddr).lifetimeEarned(customer), 5e18, "ledger updated under new reportOwner");
 }
+
+
+    /*//////////////////////////////////////////////////////////////
+                        CAP-WINDOW BOUNDARIES (gen-5)
+    //////////////////////////////////////////////////////////////*/
+
+    // Known-date checks for CampaignRulesLib.windowStart (UTC calendar math).
+    /// @notice Deploy a full custom Rules struct (used by the cap-window tests).
+    function _deployWithRulesWindowedRaw(CampaignRulesLib.Rules memory rules) internal returns (address) {
+        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
+            rateBps: RATE_BPS,
+            // Fixed live window covering every vm.warp target in the window
+            // tests (block.timestamp is ~1 until warped, so it can't anchor).
+            start: 1780000000,
+            end: 1800000000,
+            reward: address(0),
+            rewardTokenId: 0,
+            rules: rules,
+            platformFeeBps: PLATFORM_FEE_BPS,
+            platformFeeAccount: PLATFORM_FEE_ACCOUNT
+        });
+        uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", keccak256(abi.encode(rules.capWindow, rules.capWindowCount)));
+        (address esc, , , , ) = factory.campaigns(id);
+        escrowAddr = esc; // window tests claim via the shared escrowAddr state
+        return esc;
+    }
+
+    function test_WindowStartDay() public pure {
+        // 2026-09-08 15:30:00 UTC = 1788967800 -> that day's midnight (1788912000)
+        assertEq(CampaignRulesLib.windowStart(1, 1, 0, 1788967800), 1788912000);
+        // midnight itself maps to itself
+        assertEq(CampaignRulesLib.windowStart(1, 1, 0, 1788912000), 1788912000);
+    }
+
+    function test_WindowStartWeek() public pure {
+        // 2026-09-07 is a Monday: Monday 00:00 UTC = 1788739200
+        assertEq(CampaignRulesLib.windowStart(2, 1, 0, 1788739200), 1788739200);
+        // 2026-09-09 12:00 UTC (same week) -> same window start
+        assertEq(CampaignRulesLib.windowStart(2, 1, 0, 1788912000 + 43200), 1788739200);
+        // next Monday (2026-09-14) starts the next window
+        assertEq(CampaignRulesLib.windowStart(2, 1, 0, 1789344000), 1789344000);
+    }
+
+    function test_WindowStartMonth() public pure {
+        // 2026-09-08 -> 2026-09-01 00:00 UTC (1788220800)
+        assertEq(CampaignRulesLib.windowStart(3, 1, 0, 1788967800), 1788220800);
+        // 2024-02-29 (leap) -> 2024-02-01
+        assertEq(CampaignRulesLib.windowStart(3, 1, 0, 1709208000), 1706745600);
+    }
+
+    function test_WindowStartYear() public pure {
+        // 2026-09-08 -> 2026-01-01
+        assertEq(CampaignRulesLib.windowStart(4, 1, 0, 1788967800), 1767225600);
+        // 2024-03-01 (leap year) -> 2024-01-01
+        assertEq(CampaignRulesLib.windowStart(4, 1, 0, 1709308800), 1704067200);
+    }
+
+    // -- Multi-period windows ("every 2 weeks" / "every 6 months" / "every 40 days") --
+
+    function test_WindowStartEveryTwoWeeks() public pure {
+        // Blocks of 2 Monday-weeks anchored at 1970-01-05. Block containing
+        // 2026-09 is anchored at Monday 2026-08-31 (1788134400).
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1788134400), 1788134400); // Mon 08-31
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1788739200), 1788134400); // Mon 09-07 (week 2)
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1789344000), 1789344000); // Mon 09-14 starts next block
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1789948800), 1789344000); // Mon 09-21 (week 2)
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1790174400), 1789344000); // Wed 09-23 mid-block
+    }
+
+    function test_WindowStartEverySixMonths() public pure {
+        // 6-month blocks since year 0: Jan-Jun and Jul-Dec.
+        // 2026-09-08 -> block 2026-07-01 (1782864000)
+        assertEq(CampaignRulesLib.windowStart(3, 6, 0, 1788967800), 1782864000);
+        // 2026-05-15 -> block 2026-01-01 (1767225600)
+        assertEq(CampaignRulesLib.windowStart(3, 6, 0, 1778803200), 1767225600);
+        // 2026-07-01 itself maps to itself
+        assertEq(CampaignRulesLib.windowStart(3, 6, 0, 1782864000), 1782864000);
+    }
+
+    function test_WindowStartEveryFortyDays() public pure {
+        // 40-day epoch-aligned blocks: window = floor(dayIndex/40)*40.
+        // dayIndex(2026-09-08) = 20705; floor(20705/40)*40 = 20680.
+        assertEq(CampaignRulesLib.windowStart(1, 40, 0, 1788967800), 20680 * 1 days);
+        // Boundary: dayIndex 20720 (20680+40) starts the next block.
+        assertEq(CampaignRulesLib.windowStart(1, 40, 0, (20720 * 1 days) + 43200), 20720 * 1 days);
+        // Last second of the 20680 block stays in it.
+        assertEq(CampaignRulesLib.windowStart(1, 40, 0, (20720 * 1 days) - 1), 20680 * 1 days);
+    }
+
+    function test_WindowStartLifetimeIgnoresCount() public pure {
+        assertEq(CampaignRulesLib.windowStart(0, 7, 0, 1788967800), 0);
+    }
+
+    /// @notice Custom reset hour: "every 2 weeks, resets at 04:30 UTC".
+    ///         04:30 = 16200s. Window boundaries sit at Mon 04:30 instead of
+    ///         Mon 00:00; the wizard collects this as capResetTime.
+    function test_WindowStartOffsetTimeOfDay() public pure {
+        uint256 t0430 = 16200; // 4h30m past midnight UTC
+
+        // Every 2 weeks @ 04:30: blocks are [Mon 04:30 .. +14d). Mon-epoch
+        // anchor shifted: first boundary is 4 days + 16200s after 1970-01-01.
+        // Mon 2026-08-31 04:30 UTC = 1788134400 + 16200 = 1788150600.
+        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 1788150600), 1788150600); // boundary itself
+        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 1789360200 - 1), 1788150600); // last sec of block
+        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 1789360200), 1789360200); // next block (Mon 09-14 04:30)
+        // 04:29:59 on boundary Monday is still the OLD block (00:00 anchoring
+        // would wrongly put it in the new one) -- the whole point of the offset.
+        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 1789360200 - 1), 1788150600);
+
+        // Daily @ 04:30: boundaries at 04:30 each day (N-day blocks epoch-aligned).
+        // 2026-09-08 04:30 UTC = 1788912000 + 16200 = 1788928200.
+        assertEq(CampaignRulesLib.windowStart(1, 1, t0430, 1788928200), 1788928200);
+        assertEq(CampaignRulesLib.windowStart(1, 1, t0430, 1788928199), 1788841800); // previous day 04:30
+        assertEq(CampaignRulesLib.windowStart(1, 1, t0430, 1788928200 + 86399), 1788928200); // 04:29:59 next day still old
+
+        // Monthly @ 04:30: 2026-09-01 04:30 UTC = 1788220800 + 16200 = 1788237000.
+        assertEq(CampaignRulesLib.windowStart(3, 1, t0430, 1788967800), 1788237000);
+        // Aug 31 04:29:59 is still the AUGUST window (starts Aug 1 04:30).
+        assertEq(CampaignRulesLib.windowStart(3, 1, t0430, 1788237000 - 1), 1785558600);
+
+        // Yearly @ 04:30: 2026-01-01 04:30 UTC = 1767225600 + 16200 = 1767241800.
+        assertEq(CampaignRulesLib.windowStart(4, 1, t0430, 1788967800), 1767241800);
+        // Dec 31 2025 04:29:59 -> 2025 window (Jan 1 2025 04:30 = 1735705800).
+        assertEq(CampaignRulesLib.windowStart(4, 1, t0430, 1767241800 - 1), 1735705800);
+
+        // Offset > 1 day is clamped to 0 (defensive: uint16 can't hold >65535s
+        // anyway, but the clamp keeps the pure function total).
+        assertEq(CampaignRulesLib.windowStart(1, 1, 90000, 1788967800), 1788912000);
+    }
+
+    // -- Behavioral: cap resets across window boundaries --
+
+    // "Every 2 weeks": exhaust the cap in week 1 of the block, verify the cap
+    // does NOT reset at the odd-week boundary, then DOES at the block boundary.
+    function test_BiWeeklyCapResetsAtBlockBoundary() public {
+        _deployWithRulesWindowedRaw(CampaignRulesLib.Rules({
+            minSpendEnabled: false, minSpend: 0,
+            capEnabled: true, cap: 5e18,
+            dayOfWeekEnabled: false, daysOfWeek: 0,
+            flatEnabled: false, flatValue: 0,
+            redeemable: true,
+            perTxCapEnabled: false, perTxCap: 0,
+            capWindow: 2,
+            capWindowCount: 2,
+            capWindowTime: 0
+        }));
+        vm.startPrank(workflowOwner);
+        // 2-week blocks anchor at Mon 2026-08-31 (block [08-31 .. 09-13]).
+        // Week 1 of the block (Mon 2026-09-07): $100 @10% -> capped at 5e18.
+        vm.warp(1788800000);
+        CampaignEscrow(escrowAddr).claim(keccak256("b1"), customer, 100e18);
+        assertEq(CampaignEscrow(escrowAddr).earnedInCapWindow(customer), 5e18);
+        // Week 2 (Wed 2026-09-09, still inside the SAME block): cap persists.
+        vm.warp(1789051200);
+        vm.expectRevert();
+        CampaignEscrow(escrowAddr).claim(keccak256("b2"), customer, 50e18);
+        // Mon 2026-09-14 starts the NEXT block: fresh headroom.
+        vm.warp(1789400000);
+        uint256 p3 = CampaignEscrow(escrowAddr).claim(keccak256("b3"), customer, 100e18);
+        assertEq(p3, 5e18, "bi-weekly cap resets at the 2-week block boundary");
+        // Lifetime ledger keeps full lineage across resets.
+        assertEq(CampaignEscrow(escrowAddr).lifetimeEarned(customer), 10e18);
+        vm.stopPrank();
+    }
+
+    // Weekly (count=1) baseline: resets every Monday.
+    function test_WeeklyCapResets() public {
+        _deployWithRulesWindowedRaw(CampaignRulesLib.Rules({
+            minSpendEnabled: false, minSpend: 0,
+            capEnabled: true, cap: 5e18,
+            dayOfWeekEnabled: false, daysOfWeek: 0,
+            flatEnabled: false, flatValue: 0,
+            redeemable: true,
+            perTxCapEnabled: false, perTxCap: 0,
+            capWindow: 2,
+            capWindowCount: 1,
+            capWindowTime: 0
+        }));
+        vm.startPrank(workflowOwner);
+        vm.warp(1788800000); // Tue 2026-09-08, inside Mon-anchored week
+        CampaignEscrow(escrowAddr).claim(keccak256("w1"), customer, 100e18);
+        assertEq(CampaignEscrow(escrowAddr).earnedInCapWindow(customer), 5e18);
+        vm.expectRevert(); // same week -> exhausted
+        CampaignEscrow(escrowAddr).claim(keccak256("w1b"), customer, 50e18);
+        vm.warp(1789400000); // next Monday -- window rolled
+        uint256 p2 = CampaignEscrow(escrowAddr).claim(keccak256("w2"), customer, 100e18);
+        assertEq(p2, 5e18, "weekly cap reset gives fresh headroom");
+        assertEq(CampaignEscrow(escrowAddr).lifetimeEarned(customer), 10e18);
+        vm.stopPrank();
+    }
+
+    // Daily (count=1) baseline: resets at UTC midnight.
+    function test_DailyCapResets() public {
+        _deployWithRulesWindowedRaw(CampaignRulesLib.Rules({
+            minSpendEnabled: false, minSpend: 0,
+            capEnabled: true, cap: 5e18,
+            dayOfWeekEnabled: false, daysOfWeek: 0,
+            flatEnabled: false, flatValue: 0,
+            redeemable: true,
+            perTxCapEnabled: false, perTxCap: 0,
+            capWindow: 1,
+            capWindowCount: 1,
+            capWindowTime: 0
+        }));
+        vm.startPrank(workflowOwner);
+        vm.warp(1788967800); // 2026-09-08 15:30 UTC
+        CampaignEscrow(escrowAddr).claim(keccak256("d1"), customer, 100e18);
+        vm.warp(1789051200); // next day -- window rolled
+        uint256 p2 = CampaignEscrow(escrowAddr).claim(keccak256("d2"), customer, 100e18);
+        assertEq(p2, 5e18, "daily cap reset");
+        vm.stopPrank();
+    }
+
+    // onReport path re-verifies points against the WINDOW ledger: a report
+    // computed on stale (lifetime) earned MUST be rejected after a reset.
+    function test_OnReportRejectsStaleWindowPoints() public {
+        _deployWithRulesWindowedRaw(CampaignRulesLib.Rules({
+            minSpendEnabled: false, minSpend: 0,
+            capEnabled: true, cap: 5e18,
+            dayOfWeekEnabled: false, daysOfWeek: 0,
+            flatEnabled: false, flatValue: 0,
+            redeemable: true,
+            perTxCapEnabled: false, perTxCap: 0,
+            capWindow: 2,
+            capWindowCount: 1,
+            capWindowTime: 0
+        }));
+        vm.startPrank(workflowOwner);
+        vm.warp(1788800000);
+        CampaignEscrow(escrowAddr).claim(keccak256("s1"), customer, 100e18); // window full (5e18)
+        vm.warp(1789400000); // new week -- windowEarned = 0
+        vm.stopPrank();
+        bytes32 nf = keccak256("stale-window-report");
+        // Report claims points=0 (as if lifetime cap still exhausted) -- the
+        // escrow's window math expects 5e18 -> mismatch reverts.
+        vm.prank(CRE_FORWARDER);
+        vm.expectRevert();
+        CampaignEscrow(escrowAddr).onReport(_metadata(workflowOwner), _report(nf, customer, 100e18, true, 0));
+        // And a correct window-aware report is accepted and mints.
+        bytes32 nf2 = keccak256("fresh-window-report");
+        vm.prank(CRE_FORWARDER);
+        CampaignEscrow(escrowAddr).onReport(_metadata(workflowOwner), _report(nf2, customer, 100e18, true, 5e18));
+        assertEq(CampaignEscrow(escrowAddr).lifetimeEarned(customer), 10e18);
+    }
 
 }

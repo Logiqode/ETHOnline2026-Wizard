@@ -85,6 +85,8 @@ contract CampaignEscrow {
         uint256 totalBalance;    // lifetime earned (lineage — never shrinks)
         uint256 unspentBalance;  // currently spendable (shrinks on redemption)
         uint256 originalBlock;   // first participation block (provenance)
+        uint256 windowEarned;    // earned within the current cap-reset window
+        uint256 windowStart;     // start of the window `windowEarned` counts in
     }
 
     /// @notice Reset guard — every setting is stuck at its initial value after initialize().
@@ -242,8 +244,9 @@ contract CampaignEscrow {
 
         // Points re-verified on-chain from public terms + ledger (defense-in-depth):
         // the delivered pointsWei must match what the rules library computes for
-        // (amountSpent, recipient's already-earned). The enclave cannot over-mint.
-        uint256 expected = this.computePointsPreview(amountSpentWei, _totalEarned(recipient));
+        // (amountSpent, recipient's earned-in-current-cap-window). The enclave
+        // cannot over-mint — including across a cap-window reset.
+        uint256 expected = this.computePointsPreview(amountSpentWei, _earnedForCap(recipient));
         if (pointsWei != expected) revert CampaignEscrow__InvalidReport();
 
         _claimInternalWithPoints(nullifier, recipient, amountSpentWei, pointsWei);
@@ -325,10 +328,10 @@ contract CampaignEscrow {
         CampaignProof storage proof = campaignLedger[terms.rewardTokenId][recipient];
         if (proof.originalBlock == 0) proof.originalBlock = block.number;
 
-        uint256 alreadyEarned = proof.totalBalance;
-        // min-spend gate (reverts if under), then points (capped only if capEnabled).
+        // min-spend gate (reverts if under), then points (capped against the
+        // CURRENT cap window, not lifetime — windowEarned rolls over).
         CampaignRulesLib.enforceMinSpend(terms.rules, amountSpent);
-        points = CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, alreadyEarned);
+        points = CampaignRulesLib.computePoints(terms.rules, terms.rateBps, amountSpent, _earnedForCap(recipient));
 
         _applyEarn(proof, nullifier, recipient, amountSpent, points);
     }
@@ -362,6 +365,17 @@ contract CampaignEscrow {
         // product: a proof-of-savings counter (totalSaved), never spendable.
         proof.totalBalance += points;
 
+        // Cap-window accounting: if the current window has rolled over since
+        // this wallet's last earn, restart the window accumulator. (Window
+        // boundaries come from CampaignRulesLib.windowStart — calendar-aligned
+        // UTC; lifetime campaigns never roll.)
+        uint256 wStart = CampaignRulesLib.windowStart(terms.rules.capWindow, terms.rules.capWindowCount, terms.rules.capWindowTime, block.timestamp);
+        if (proof.windowStart != wStart) {
+            proof.windowStart = wStart;
+            proof.windowEarned = 0;
+        }
+        proof.windowEarned += points;
+
         // Redeemable (cashback) campaigns grow the spendable balance and mint
         // ERC-1155. Discount campaigns (redeemable = false) stop here: unspent
         // stays 0 forever, so any redeemFor reverts InsufficientBalance — there
@@ -376,9 +390,29 @@ contract CampaignEscrow {
         emit Claim(nullifier, recipient, points, amountSpent);
     }
 
-    /// @dev Recipient's lifetime earned (for onReport's points re-verification).
+    /// @dev Recipient's lifetime earned (lineage view — never shrinks).
     function _totalEarned(address wallet) internal view returns (uint256) {
         return campaignLedger[terms.rewardTokenId][wallet].totalBalance;
+    }
+
+    /// @dev Earned amount the CAP applies against: the current window's total
+    ///      (windowEarned, rolled over to 0 when the window boundary passed),
+    ///      or lifetime for capWindow = 0. This is the single source of truth
+    ///      for both claim paths and the DON's read (via earnedInCapWindow).
+    function _earnedForCap(address wallet) internal view returns (uint256) {
+        CampaignProof storage proof = campaignLedger[terms.rewardTokenId][wallet];
+        if (terms.rules.capWindow == 0) return proof.totalBalance;
+        uint256 wStart = CampaignRulesLib.windowStart(terms.rules.capWindow, terms.rules.capWindowCount, terms.rules.capWindowTime, block.timestamp);
+        return proof.windowStart == wStart ? proof.windowEarned : 0;
+    }
+
+    /// @notice Earned amount inside the CURRENT cap-reset window for `wallet`
+    ///         (what the per-user cap clamps against right now). The workflow
+    ///         DON reads this via eth_call instead of trusting the payload's
+    ///         earnedInWindow — verdict math can never diverge from the escrow.
+    ///         For lifetime caps this equals lifetimeEarned(wallet).
+    function earnedInCapWindow(address wallet) external view returns (uint256) {
+        return _earnedForCap(wallet);
     }
 
     function _onlyOwner() internal view {
