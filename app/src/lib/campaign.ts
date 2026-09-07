@@ -47,6 +47,10 @@ export interface RuleField {
   hint?: string
   type: 'number' | 'text' | 'datetime' | 'select' | 'multi' | 'time' | 'toggle'
   options?: string[]
+  /** Option values the user cannot pick (rendered greyed out + disabled). */
+  disabledOptions?: string[]
+  /** Tooltip for disabled options. */
+  disabledHint?: string
   placeholder?: string
   min?: number
   max?: number
@@ -116,7 +120,7 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
       { key: 'cap', label: 'Reward cap / user', type: 'number', placeholder: '100', min: 0 },
       { key: 'capPeriod', label: 'Reset period', type: 'select', options: ['Lifetime', 'Year', 'Month', 'Week', 'Day'] },
       { key: 'capPeriodCount', label: 'Every', type: 'number', placeholder: '1', min: 1 },
-      { key: 'capResetBasis', label: 'Reset basis', type: 'select', options: ['Calendar', 'Rolling'], hint: 'Calendar: fixed UTC boundaries — fully enforced on-chain. Rolling: window re-anchors per user at first earn — PRODUCTION-LIMITED (no on-chain enforcement yet); launches map it to Lifetime.' },
+      { key: 'capResetBasis', label: 'Reset basis', type: 'select', options: ['Calendar', 'Rolling'], disabledOptions: ['Rolling'], disabledHint: 'PRODUCTION-LIMITED: rolling windows re-anchor per user and have no on-chain enforcement yet. Launches map Rolling to a lifetime cap.', hint: 'Calendar: fixed UTC boundaries — fully enforced on-chain.' },
       { key: 'capResetWeekday', label: 'Reset on', type: 'select', options: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], hint: 'Only for Calendar + Week — the weekday boundary (e.g. every 3 weeks on Wednesday).' },
       { key: 'capResetDay', label: 'Reset on day', type: 'number', placeholder: '1', min: 1, max: 31, hint: 'Day of month (1-31). On-chain this anchors to the 1st of the month/year; custom day-of-month is PRODUCTION-LIMITED.' },
       { key: 'capResetMonth', label: 'Reset month', type: 'select', options: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'], hint: 'Only for Calendar + Year. On-chain year windows anchor to Jan 1; custom month is PRODUCTION-LIMITED.' },

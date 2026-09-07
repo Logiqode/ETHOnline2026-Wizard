@@ -473,9 +473,18 @@ export default function CampaignWizard() {
           <div className="field" style={{ marginTop: 8 }}>
             <label className="field-label">Timezone</label>
             <select className="select" value={terms.timezone} onChange={(e) => setTerm('timezone', e.target.value as Timezone)} aria-label="Timezone">
-              {TIMEZONES.map((tz) => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
+              {TIMEZONES.map((tz) => (
+                <option
+                  key={tz.value}
+                  value={tz.value}
+                  disabled={tz.value !== 'UTC'}
+                  title={tz.value !== 'UTC' ? 'PRODUCTION-LIMITED: on-chain reset windows are UTC-anchored. Non-UTC timezones require offset translation in the launch path (and DST handling for zones with daylight saving).' : undefined}
+                >
+                  {tz.label}{tz.value !== 'UTC' ? ' — PRODUCTION-LIMITED' : ''}
+                </option>
+              ))}
             </select>
-            <span className="field-hint">Applies to the whole campaign — Start, End, and all time-based rules.</span>
+            <span className="field-hint">Applies to the whole campaign — Start, End, and all time-based rules. Only UTC is selectable for now — on-chain reset windows are UTC-anchored; other zones are PRODUCTION-LIMITED.</span>
           </div>
           <div className="field">
             <label className="field-label">Total redeem cap (campaign)</label>
@@ -778,9 +787,22 @@ function NumericInput({ value, onChange, min, max, placeholder, className }: {
   )
 }
 
-function RuleInput({ field, value, maxOverride, unit, onChange }: { field: { key: string; label: string; type: string; options?: string[]; placeholder?: string; min?: number; max?: number; hint?: string }; value: string | number | boolean; maxOverride?: number; unit?: string; onChange: (v: string | number | boolean) => void }) {
+function RuleInput({ field, value, maxOverride, unit, onChange }: { field: { key: string; label: string; type: string; options?: string[]; disabledOptions?: string[]; disabledHint?: string; placeholder?: string; min?: number; max?: number; hint?: string }; value: string | number | boolean; maxOverride?: number; unit?: string; onChange: (v: string | number | boolean) => void }) {
   if (field.type === 'select') {
-    return <select className="select" value={String(value)} onChange={(e) => onChange(e.target.value)}>{field.options?.map((o) => <option key={o}>{o}</option>)}</select>
+    const disabled = field.disabledOptions ?? []
+    return (
+      <select
+        className="select"
+        value={String(value)}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {field.options?.map((o) => (
+          <option key={o} value={o} disabled={disabled.includes(o)} title={disabled.includes(o) ? field.disabledHint : undefined}>
+            {o}{disabled.includes(o) && field.disabledHint ? ' — PRODUCTION-LIMITED' : ''}
+          </option>
+        ))}
+      </select>
+    )
   }
   if (field.type === 'number') {
     const input = <NumericInput value={Number(value)} min={field.min} max={maxOverride ?? field.max} placeholder={field.placeholder} onChange={(v) => onChange(v)} />

@@ -535,6 +535,53 @@ contract CampaignWorkflowTest is Test {
         vm.expectRevert(); // CampaignRulesLib.NotAllowedDay
         CampaignEscrow(esc).claim(keccak256("tuesday"), customer, 12e18);
     }
+ 
+    /// @notice 3c. MULTI-DAY MASK — Sun/Wed/Friday only (bits 6,2,4 = 0b1010100 = 84).
+    ///         Wednesday claim mints; Tuesday claim reverts NotAllowedDay.
+    function test_RuleShapeDayOfWeekMultiDayMask() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        // 0b1010100: bit 2 = Wednesday, bit 4 = Friday, bit 6 = Sunday (0=Mon..6=Sun).
+        address esc = _deployWithRules(false, 0, false, 0, true, 84, start, end);
+ 
+        // Find the next in-window Wednesday (dayIndex 2) and Tuesday (dayIndex 1).
+        uint256 wedTs;
+        for (uint256 ts = start; ts <= end; ts += 1 days) {
+            if (((ts / 86400) + 3) % 7 == 2) { wedTs = ts; break; }
+        }
+        assertTrue(wedTs != 0, "found a Wednesday in-window");
+        vm.warp(wedTs);
+ 
+        // Wednesday allowed -> mints
+        vm.prank(workflowOwner);
+        uint256 p = CampaignEscrow(esc).claim(keccak256("wednesday"), customer, 12e18);
+        assertEq(p, 1.2e18, "Wednesday allowed -> mints");
+ 
+        // Tuesday disallowed -> reverts NotAllowedDay
+        vm.warp(wedTs - 1 days);
+        vm.prank(workflowOwner);
+        vm.expectRevert(abi.encodeWithSelector(CampaignRulesLib.NotAllowedDay.selector, 1, 84));
+        CampaignEscrow(esc).claim(keccak256("tuesday"), customer, 12e18);
+ 
+        // Friday allowed (same week, +3 days from Tuesday) -> mints
+        vm.warp(wedTs + 2 days);
+        vm.prank(workflowOwner);
+        p = CampaignEscrow(esc).claim(keccak256("friday"), customer, 12e18);
+        assertEq(p, 1.2e18, "Friday allowed -> mints");
+    }
+ 
+    /// @notice 3d. MASK-ZERO EDGE — dayOfWeekEnabled=true with an empty bitmask
+    ///         means NO day is allowed: every claim reverts NotAllowedDay.
+    function test_RuleShapeDayOfWeekEmptyMaskRejectsAll() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        address esc = _deployWithRules(false, 0, false, 0, true, 0, start, end);
+ 
+        // Any day (here: whatever today is) -> reverts NotAllowedDay(0).
+        vm.prank(workflowOwner);
+        vm.expectRevert(abi.encodeWithSelector(CampaignRulesLib.NotAllowedDay.selector, uint8(((block.timestamp / 1 days) + 3) % 7), 0));
+        CampaignEscrow(esc).claim(keccak256("any"), customer, 12e18);
+    }
 
     /// @notice 3b. Day-of-week cannot bypass the campaign window: before start or after end
     ///         always reverts the window error even if the day is allowed.
