@@ -189,6 +189,16 @@ campaigns.post('/:id/launch', async (c) => {
     return c.json({ error: validation.error }, 400)
   }
 
+  // ── Reward-type gate (PRODUCTION-LIMITED honesty) ─────────────────────────
+  // Only 'monetary' (cashback/discount) has a launch mapping. 'digital' badge
+  // campaigns WOULD be supported by the on-chain caps (flat mechanic, value 1,
+  // per-tx 1) but the launcher wiring doesn't exist yet — a launch today would
+  // silently encode rateBps=0/flat=0 and mint nothing. Refuse loudly instead.
+  const launchRewardType = String(row.mechanics?.rewardType ?? (row as { reward_type?: string }).reward_type ?? '')
+  if (launchRewardType !== 'monetary') {
+    return c.json({ error: `PRODUCTION-LIMITED: reward type "${launchRewardType}" has no launch mapping yet — only Monetary (cashback/discount) campaigns can launch on-chain.` }, 400)
+  }
+
   const salt = generateSalt()
 
   // ── On-chain createCampaign: real deployment to Base Sepolia ──────────────

@@ -519,8 +519,15 @@ export default function CampaignWizard() {
           <label className="field-label">Reward type</label>
           <div className="segmented" role="radiogroup">
             {REWARD_TYPES.map((t) => (
-              <button key={t.value} className={rewardType === t.value ? 'active' : ''} onClick={() => setRewardType(t.value)} role="radio" aria-checked={rewardType === t.value}>
-                {t.label}
+              <button
+                key={t.value}
+                className={rewardType === t.value ? 'active' : ''}
+                onClick={() => setRewardType(t.value)}
+                role="radio"
+                aria-checked={rewardType === t.value}
+                title={t.value !== 'monetary' ? t.hint : undefined}
+              >
+                {t.label}{t.value !== 'monetary' ? ' — PRODUCTION-LIMITED' : ''}
               </button>
             ))}
           </div>
@@ -531,16 +538,24 @@ export default function CampaignWizard() {
           <div className="reward-digital-fields">
             <div className="field">
               <label className="field-label">Merchandise name</label>
-              <input className="input" value={String(rewardValues.digitalName)} onChange={(e) => setRewardValue('digitalName', e.target.value)} placeholder="e.g. Golden Badge" />
+              <input
+                className="input"
+                value={String(rewardValues.digitalName)}
+                onChange={(e) => setRewardValue('digitalName', e.target.value)}
+                placeholder="e.g. Golden Badge"
+                disabled
+                title="PRODUCTION-LIMITED: badge minting is not wired in the launch path yet — configuration is view-only."
+                style={{ opacity: 0.55, cursor: 'not-allowed' }}
+              />
             </div>
             <div className="field">
               <label className="field-label">Transferable</label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <button className={`rule-toggle${rewardValues.digitalTransferable ? ' on' : ''}`} onClick={() => setRewardValue('digitalTransferable', !rewardValues.digitalTransferable)} aria-pressed={!!rewardValues.digitalTransferable} aria-label="Toggle transferable">
+                <button className={`rule-toggle${rewardValues.digitalTransferable ? ' on' : ''}`} disabled aria-pressed={!!rewardValues.digitalTransferable} aria-label="Toggle transferable (disabled — production-limited)" title="PRODUCTION-LIMITED: badge minting is not wired in the launch path yet — configuration is view-only." style={{ opacity: 0.55, cursor: 'not-allowed' }}>
                   <span className="rule-toggle-knob" />
                 </button>
                 <span className="field-hint" style={{ margin: 0 }}>
-                  {rewardValues.digitalTransferable ? 'Users can transfer. Admins/whitelisted can move on behalf.' : 'Non-transferable (soulbound).'}
+                  {rewardValues.digitalTransferable ? 'Users can transfer. Admins/whitelisted can move on behalf.' : 'Non-transferable (soulbound).'} <strong>PRODUCTION-LIMITED — badge campaigns cannot launch yet.</strong>
                 </span>
               </div>
             </div>
@@ -728,10 +743,18 @@ export default function CampaignWizard() {
         ))}
         <div className="launch-panel" style={{ marginTop: 16 }}>
           <div className="launch-info">
-            {launched ? <strong>Launched — pending on-chain wiring</strong> : <><strong>Launch Campaign</strong> · saves a draft, then validates + launches</>}
+            {rewardType !== 'monetary' ? (
+              <strong>PRODUCTION-LIMITED — {rewardTypeMeta.label} campaigns cannot launch on-chain yet (no launcher wiring). Switch to Monetary to launch.</strong>
+            ) : launched ? <strong>Launched — pending on-chain wiring</strong> : <><strong>Launch Campaign</strong> · saves a draft, then validates + launches</>}
           </div>
-          <button className="btn btn-primary" onClick={launchCampaign} disabled={launched || saving}>
-            {saving ? 'Launching…' : launched ? 'Launched ✓' : 'Launch Campaign'}
+          <button
+            className="btn btn-primary"
+            onClick={launchCampaign}
+            disabled={launched || saving || rewardType !== 'monetary'}
+            title={rewardType !== 'monetary' ? 'PRODUCTION-LIMITED: this reward type has no launch mapping yet — only Monetary campaigns can launch on-chain.' : undefined}
+            style={rewardType !== 'monetary' ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
+          >
+            {rewardType !== 'monetary' ? 'Launch unavailable' : saving ? 'Launching…' : launched ? 'Launched ✓' : 'Launch Campaign'}
           </button>
         </div>
         {saveError && <div className="launch-error" role="alert">⚠️ {saveError}</div>}

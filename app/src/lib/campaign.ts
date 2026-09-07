@@ -27,8 +27,8 @@ export interface BrandParticipant {
 // ERC-1155 badge/item; 'physical' is off-chain fulfillment.
 export const REWARD_TYPES: { value: RewardType; label: string; hint: string }[] = [
   { value: 'monetary', label: 'Monetary', hint: 'Cashback points or a discount.' },
-  { value: 'digital', label: 'Digital Merchandise', hint: 'NFT-like ERC-1155 badge/item.' },
-  { value: 'physical', label: 'Physical Merchandise', hint: 'Off-chain fulfillment.' },
+  { value: 'digital', label: 'Digital Merchandise', hint: 'PRODUCTION-LIMITED: badge minting (1 per purchase) is not wired in the launch path yet — the on-chain caps support it, the launcher does not.' },
+  { value: 'physical', label: 'Physical Merchandise', hint: 'PRODUCTION-LIMITED: off-chain fulfillment has no on-chain enforcement.' },
 ]
 
 // ─── Reward mechanics blocks ───────────────────────────────────
