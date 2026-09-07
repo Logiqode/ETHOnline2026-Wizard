@@ -19,11 +19,15 @@ contract SeedCampaigns is Script {
 
         address factoryAddr = vm.envAddress("FACTORY");
         CampaignFactory factory = CampaignFactory(factoryAddr);
-        address workflowOwner = msg.sender;
+        address workflowOwner = vm.envAddress("WORKFLOW_OWNER");
         // CRE *registry* owner the forwarder stamps into report metadata — the
-        // EOA that deployed the workflow (project.yaml account). Zero disables
-        // the distinction (onReport then accepts workflowOwner's reports).
-        address reportOwner = vm.envOr("REPORT_OWNER", address(0));
+        // EOA that deployed the workflow (project.yaml account). Defaults to
+        // WORKFLOW_OWNER; never leave at msg.sender — a mismatch makes the
+        // escrow revert in onReport, which surfaces as forwarder success=00
+        // with state NotAttempted and looks like a transient DON hiccup.
+        // (2026-09-07: a reseed defaulting to msg.sender bricked delivery on
+        // all 3 gen-3 escrows until setReportOwner() repaired it.)
+        address reportOwner = vm.envOr("REPORT_OWNER", workflowOwner);
 
         uint64 start = uint64(block.timestamp - 1 days);
         uint64 end = uint64(block.timestamp + 365 days);
