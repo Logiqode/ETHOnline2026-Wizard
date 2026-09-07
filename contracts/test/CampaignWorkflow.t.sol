@@ -56,7 +56,8 @@ contract CampaignWorkflowTest is Test {
                 perTxCap: 0,
                 capWindow: 0,
                 capWindowCount: 1,
-            capWindowTime: 0
+            capWindowTime: 0,
+            capWindowDow: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -213,7 +214,8 @@ contract CampaignWorkflowTest is Test {
                 perTxCap: 50e18,
                 capWindow: 0,
                 capWindowCount: 1,
-            capWindowTime: 0
+            capWindowTime: 0,
+            capWindowDow: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -416,7 +418,8 @@ contract CampaignWorkflowTest is Test {
                 perTxCap: 0,
                 capWindow: capWindow,
                 capWindowCount: capWindowCount,
-                capWindowTime: 0
+                capWindowTime: 0,
+                capWindowDow: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -455,7 +458,8 @@ contract CampaignWorkflowTest is Test {
                 perTxCap: 0,
                 capWindow: 0,
                 capWindowCount: 1,
-            capWindowTime: 0
+            capWindowTime: 0,
+            capWindowDow: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -972,32 +976,32 @@ function test_SetReportOwnerHandover() public {
 
     function test_WindowStartDay() public pure {
         // 2026-09-08 15:30:00 UTC = 1788967800 -> that day's midnight (1788912000)
-        assertEq(CampaignRulesLib.windowStart(1, 1, 0, 1788967800), 1788912000);
+        assertEq(CampaignRulesLib.windowStart(1, 1, 0, 0, 1788967800), 1788912000);
         // midnight itself maps to itself
-        assertEq(CampaignRulesLib.windowStart(1, 1, 0, 1788912000), 1788912000);
+        assertEq(CampaignRulesLib.windowStart(1, 1, 0, 0, 1788912000), 1788912000);
     }
 
     function test_WindowStartWeek() public pure {
         // 2026-09-07 is a Monday: Monday 00:00 UTC = 1788739200
-        assertEq(CampaignRulesLib.windowStart(2, 1, 0, 1788739200), 1788739200);
+        assertEq(CampaignRulesLib.windowStart(2, 1, 0, 0, 1788739200), 1788739200);
         // 2026-09-09 12:00 UTC (same week) -> same window start
-        assertEq(CampaignRulesLib.windowStart(2, 1, 0, 1788912000 + 43200), 1788739200);
+        assertEq(CampaignRulesLib.windowStart(2, 1, 0, 0, 1788912000 + 43200), 1788739200);
         // next Monday (2026-09-14) starts the next window
-        assertEq(CampaignRulesLib.windowStart(2, 1, 0, 1789344000), 1789344000);
+        assertEq(CampaignRulesLib.windowStart(2, 1, 0, 0, 1789344000), 1789344000);
     }
 
     function test_WindowStartMonth() public pure {
         // 2026-09-08 -> 2026-09-01 00:00 UTC (1788220800)
-        assertEq(CampaignRulesLib.windowStart(3, 1, 0, 1788967800), 1788220800);
+        assertEq(CampaignRulesLib.windowStart(3, 1, 0, 0, 1788967800), 1788220800);
         // 2024-02-29 (leap) -> 2024-02-01
-        assertEq(CampaignRulesLib.windowStart(3, 1, 0, 1709208000), 1706745600);
+        assertEq(CampaignRulesLib.windowStart(3, 1, 0, 0, 1709208000), 1706745600);
     }
 
     function test_WindowStartYear() public pure {
         // 2026-09-08 -> 2026-01-01
-        assertEq(CampaignRulesLib.windowStart(4, 1, 0, 1788967800), 1767225600);
+        assertEq(CampaignRulesLib.windowStart(4, 1, 0, 0, 1788967800), 1767225600);
         // 2024-03-01 (leap year) -> 2024-01-01
-        assertEq(CampaignRulesLib.windowStart(4, 1, 0, 1709308800), 1704067200);
+        assertEq(CampaignRulesLib.windowStart(4, 1, 0, 0, 1709308800), 1704067200);
     }
 
     // -- Multi-period windows ("every 2 weeks" / "every 6 months" / "every 40 days") --
@@ -1005,35 +1009,35 @@ function test_SetReportOwnerHandover() public {
     function test_WindowStartEveryTwoWeeks() public pure {
         // Blocks of 2 Monday-weeks anchored at 1970-01-05. Block containing
         // 2026-09 is anchored at Monday 2026-08-31 (1788134400).
-        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1788134400), 1788134400); // Mon 08-31
-        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1788739200), 1788134400); // Mon 09-07 (week 2)
-        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1789344000), 1789344000); // Mon 09-14 starts next block
-        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1789948800), 1789344000); // Mon 09-21 (week 2)
-        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 1790174400), 1789344000); // Wed 09-23 mid-block
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 0, 1788134400), 1788134400); // Mon 08-31
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 0, 1788739200), 1788134400); // Mon 09-07 (week 2)
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 0, 1789344000), 1789344000); // Mon 09-14 starts next block
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 0, 1789948800), 1789344000); // Mon 09-21 (week 2)
+        assertEq(CampaignRulesLib.windowStart(2, 2, 0, 0, 1790174400), 1789344000); // Wed 09-23 mid-block
     }
 
     function test_WindowStartEverySixMonths() public pure {
         // 6-month blocks since year 0: Jan-Jun and Jul-Dec.
         // 2026-09-08 -> block 2026-07-01 (1782864000)
-        assertEq(CampaignRulesLib.windowStart(3, 6, 0, 1788967800), 1782864000);
+        assertEq(CampaignRulesLib.windowStart(3, 6, 0, 0, 1788967800), 1782864000);
         // 2026-05-15 -> block 2026-01-01 (1767225600)
-        assertEq(CampaignRulesLib.windowStart(3, 6, 0, 1778803200), 1767225600);
+        assertEq(CampaignRulesLib.windowStart(3, 6, 0, 0, 1778803200), 1767225600);
         // 2026-07-01 itself maps to itself
-        assertEq(CampaignRulesLib.windowStart(3, 6, 0, 1782864000), 1782864000);
+        assertEq(CampaignRulesLib.windowStart(3, 6, 0, 0, 1782864000), 1782864000);
     }
 
     function test_WindowStartEveryFortyDays() public pure {
         // 40-day epoch-aligned blocks: window = floor(dayIndex/40)*40.
         // dayIndex(2026-09-08) = 20705; floor(20705/40)*40 = 20680.
-        assertEq(CampaignRulesLib.windowStart(1, 40, 0, 1788967800), 20680 * 1 days);
+        assertEq(CampaignRulesLib.windowStart(1, 40, 0, 0, 1788967800), 20680 * 1 days);
         // Boundary: dayIndex 20720 (20680+40) starts the next block.
-        assertEq(CampaignRulesLib.windowStart(1, 40, 0, (20720 * 1 days) + 43200), 20720 * 1 days);
+        assertEq(CampaignRulesLib.windowStart(1, 40, 0, 0, (20720 * 1 days) + 43200), 20720 * 1 days);
         // Last second of the 20680 block stays in it.
-        assertEq(CampaignRulesLib.windowStart(1, 40, 0, (20720 * 1 days) - 1), 20680 * 1 days);
+        assertEq(CampaignRulesLib.windowStart(1, 40, 0, 0, (20720 * 1 days) - 1), 20680 * 1 days);
     }
 
     function test_WindowStartLifetimeIgnoresCount() public pure {
-        assertEq(CampaignRulesLib.windowStart(0, 7, 0, 1788967800), 0);
+        assertEq(CampaignRulesLib.windowStart(0, 7, 0, 0, 1788967800), 0);
     }
 
     /// @notice Custom reset hour: "every 2 weeks, resets at 04:30 UTC".
@@ -1045,32 +1049,58 @@ function test_SetReportOwnerHandover() public {
         // Every 2 weeks @ 04:30: blocks are [Mon 04:30 .. +14d). Mon-epoch
         // anchor shifted: first boundary is 4 days + 16200s after 1970-01-01.
         // Mon 2026-08-31 04:30 UTC = 1788134400 + 16200 = 1788150600.
-        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 1788150600), 1788150600); // boundary itself
-        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 1789360200 - 1), 1788150600); // last sec of block
-        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 1789360200), 1789360200); // next block (Mon 09-14 04:30)
+        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 0, 1788150600), 1788150600); // boundary itself
+        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 0, 1789360200 - 1), 1788150600); // last sec of block
+        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 0, 1789360200), 1789360200); // next block (Mon 09-14 04:30)
         // 04:29:59 on boundary Monday is still the OLD block (00:00 anchoring
         // would wrongly put it in the new one) -- the whole point of the offset.
-        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 1789360200 - 1), 1788150600);
+        assertEq(CampaignRulesLib.windowStart(2, 2, t0430, 0, 1789360200 - 1), 1788150600);
 
         // Daily @ 04:30: boundaries at 04:30 each day (N-day blocks epoch-aligned).
         // 2026-09-08 04:30 UTC = 1788912000 + 16200 = 1788928200.
-        assertEq(CampaignRulesLib.windowStart(1, 1, t0430, 1788928200), 1788928200);
-        assertEq(CampaignRulesLib.windowStart(1, 1, t0430, 1788928199), 1788841800); // previous day 04:30
-        assertEq(CampaignRulesLib.windowStart(1, 1, t0430, 1788928200 + 86399), 1788928200); // 04:29:59 next day still old
+        assertEq(CampaignRulesLib.windowStart(1, 1, t0430, 0, 1788928200), 1788928200);
+        assertEq(CampaignRulesLib.windowStart(1, 1, t0430, 0, 1788928199), 1788841800); // previous day 04:30
+        assertEq(CampaignRulesLib.windowStart(1, 1, t0430, 0, 1788928200 + 86399), 1788928200); // 04:29:59 next day still old
 
         // Monthly @ 04:30: 2026-09-01 04:30 UTC = 1788220800 + 16200 = 1788237000.
-        assertEq(CampaignRulesLib.windowStart(3, 1, t0430, 1788967800), 1788237000);
+        assertEq(CampaignRulesLib.windowStart(3, 1, t0430, 0, 1788967800), 1788237000);
         // Aug 31 04:29:59 is still the AUGUST window (starts Aug 1 04:30).
-        assertEq(CampaignRulesLib.windowStart(3, 1, t0430, 1788237000 - 1), 1785558600);
+        assertEq(CampaignRulesLib.windowStart(3, 1, t0430, 0, 1788237000 - 1), 1785558600);
 
         // Yearly @ 04:30: 2026-01-01 04:30 UTC = 1767225600 + 16200 = 1767241800.
-        assertEq(CampaignRulesLib.windowStart(4, 1, t0430, 1788967800), 1767241800);
+        assertEq(CampaignRulesLib.windowStart(4, 1, t0430, 0, 1788967800), 1767241800);
         // Dec 31 2025 04:29:59 -> 2025 window (Jan 1 2025 04:30 = 1735705800).
-        assertEq(CampaignRulesLib.windowStart(4, 1, t0430, 1767241800 - 1), 1735705800);
+        assertEq(CampaignRulesLib.windowStart(4, 1, t0430, 0, 1767241800 - 1), 1735705800);
 
         // Offset > 1 day is clamped to 0 (defensive: uint16 can't hold >65535s
         // anyway, but the clamp keeps the pure function total).
-        assertEq(CampaignRulesLib.windowStart(1, 1, 90000, 1788967800), 1788912000);
+        assertEq(CampaignRulesLib.windowStart(1, 1, 90000, 0, 1788967800), 1788912000);
+    }
+
+    /// @notice "Every 3 weeks, on Wednesdays, at 02:51 UTC" — anchor weekday +
+    ///         time-of-day + multi-week count combined (capWindowDow = 2,
+    ///         capWindowTime = 10260, capWindowCount = 3).
+    function test_WindowStartEvery3WeeksWednesday0251() public pure {
+        uint256 t0251 = 10260; // 2h51m past midnight UTC
+        uint8 WED = 2;         // 0 = Monday .. 6 = Sunday
+
+        // Wednesday-epoch base = 4d (Mon) + 2d (Wed) + 10260s = 6d + 10260s.
+        // 3-week blocks: [Wed 02:51 + 21d * k). Block containing Sep 2026
+        // starts Wed 2026-08-26 02:51 UTC = 1787712660.
+        assertEq(CampaignRulesLib.windowStart(2, 3, t0251, WED, 1788922260), 1787712660); // Wed 09-09 02:51
+        // Weeks 1-2 of the block stay inside it.
+        assertEq(CampaignRulesLib.windowStart(2, 3, t0251, WED, 1787712660 + 7 * 1 days), 1787712660);
+        assertEq(CampaignRulesLib.windowStart(2, 3, t0251, WED, 1787712660 + 14 * 1 days), 1787712660);
+        // Last second of the block (Wed 09-16 02:50:59) is still the old block —
+        // proving the anchor time is honored, not just the weekday.
+        assertEq(CampaignRulesLib.windowStart(2, 3, t0251, WED, 1789527060 - 1), 1787712660);
+        // Wed 09-16 02:51:00 starts the next 3-week block.
+        assertEq(CampaignRulesLib.windowStart(2, 3, t0251, WED, 1789527060), 1789527060);
+        // A Monday inside the block maps to the same Wednesday-anchored window.
+        assertEq(CampaignRulesLib.windowStart(2, 3, t0251, WED, 1788739200 + 10260), 1787712660); // Mon 09-07 02:51
+        // Monday-anchored math is untouched: same ts with dow=0 lands in a
+        // Monday block instead (Mon 2026-08-24 02:51 UTC).
+        assertEq(CampaignRulesLib.windowStart(2, 3, t0251, 0, 1788922260), 1787539860);
     }
 
     // -- Behavioral: cap resets across window boundaries --
@@ -1087,7 +1117,8 @@ function test_SetReportOwnerHandover() public {
             perTxCapEnabled: false, perTxCap: 0,
             capWindow: 2,
             capWindowCount: 2,
-            capWindowTime: 0
+            capWindowTime: 0,
+            capWindowDow: 0
         }));
         vm.startPrank(workflowOwner);
         // 2-week blocks anchor at Mon 2026-08-31 (block [08-31 .. 09-13]).
@@ -1119,7 +1150,8 @@ function test_SetReportOwnerHandover() public {
             perTxCapEnabled: false, perTxCap: 0,
             capWindow: 2,
             capWindowCount: 1,
-            capWindowTime: 0
+            capWindowTime: 0,
+            capWindowDow: 0
         }));
         vm.startPrank(workflowOwner);
         vm.warp(1788800000); // Tue 2026-09-08, inside Mon-anchored week
@@ -1145,7 +1177,8 @@ function test_SetReportOwnerHandover() public {
             perTxCapEnabled: false, perTxCap: 0,
             capWindow: 1,
             capWindowCount: 1,
-            capWindowTime: 0
+            capWindowTime: 0,
+            capWindowDow: 0
         }));
         vm.startPrank(workflowOwner);
         vm.warp(1788967800); // 2026-09-08 15:30 UTC
@@ -1168,7 +1201,8 @@ function test_SetReportOwnerHandover() public {
             perTxCapEnabled: false, perTxCap: 0,
             capWindow: 2,
             capWindowCount: 1,
-            capWindowTime: 0
+            capWindowTime: 0,
+            capWindowDow: 0
         }));
         vm.startPrank(workflowOwner);
         vm.warp(1788800000);

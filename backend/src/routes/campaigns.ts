@@ -230,6 +230,27 @@ campaigns.post('/:id/launch', async (c) => {
     ? usdToWei(Number((cashbackPerTxCapOn ? rv.cashbackPerTxCap : rv.discountPerTxCap) ?? 0))
     : 0n
 
+  // ── Cap-reset window mapping (gen-5: enforced on-chain, CampaignRulesLib) ─
+  // capWindow: 0 lifetime, 1 day, 2 week, 3 month, 4 year. Rolling basis has
+  // NO on-chain window math (calendar math only) — the wizard greys it out as
+  // PRODUCTION-LIMITED, and the launch mapping maps it to lifetime honestly.
+  const capPeriod = String(rvals.capPeriod ?? 'Lifetime')
+  const capCount = Math.max(1, Math.min(255, Number(rvals.capPeriodCount ?? 1)))
+  const calendarBasis = String(rvals.capResetBasis ?? 'Rolling') === 'Calendar'
+  const windowKind = capEnabled && capPeriod !== 'Lifetime' && calendarBasis
+    ? ({ Day: 1, Week: 2, Month: 3, Year: 4 } as Record<string, number>)[capPeriod] ?? 0
+    : 0
+  // Reset time "HH:MM" (wizard form) → seconds past midnight UTC.
+  const hm = String(rvals.capResetTime ?? '00:00').match(/^(\d{1,2}):(\d{2})$/)
+  const capWindowTime = windowKind > 0 && hm
+    ? Math.min(86399, Number(hm[1]) * 3600 + Number(hm[2]) * 60)
+    : 0
+  // Week anchor weekday: wizard stores 'Monday'.. name; 0=Mon..6=Sun.
+  const dowNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+  const capWindowDow = windowKind === 2
+    ? Math.max(0, Math.min(6, dowNames.indexOf(String(rvals.capResetWeekday ?? 'Monday'))))
+    : 0
+
   let onchain
   try {
     onchain = await createCampaignOnChain({
@@ -248,6 +269,10 @@ campaigns.post('/:id/launch', async (c) => {
         redeemable,
         perTxCapEnabled,
         perTxCapWei,
+        capWindow: windowKind,
+        capWindowCount: windowKind > 0 ? capCount : 0,
+        capWindowTime,
+        capWindowDow,
       },
       // The DON stamps the CRE *registry* owner (workflow deployer EOA) into
       // report metadata; the escrow's reportOwner must match or onReport

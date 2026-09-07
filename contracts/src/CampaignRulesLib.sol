@@ -36,6 +36,7 @@ library CampaignRulesLib {
         uint8  capWindow;        // cap reset window: 0 = lifetime, 1 = day, 2 = week (Mon), 3 = month (1st), 4 = year (Jan 1) — all UTC calendar-aligned
         uint8  capWindowCount;   // window spans N periods ("every 2 weeks" → capWindow 2, count 2); ignored for lifetime
         uint16 capWindowTime;    // seconds past midnight UTC for the reset instant (e.g. 16200 = 04:30 UTC); 0 = midnight
+        uint8  capWindowDow;     // week-window anchor weekday: 0 = Monday .. 6 = Sunday (only read when capWindow = 2); 0 = Monday
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -57,7 +58,7 @@ library CampaignRulesLib {
     ///         N-month calendar blocks; "every 40 days" = N-day epoch-aligned
     ///         blocks. Month/year use the civil-date algorithm (Hinnant) — pure,
     ///         no oracle, no DST.
-    function windowStart(uint8 capWindow, uint8 capWindowCount, uint256 timeOfDay, uint256 ts) internal pure returns (uint256) {
+    function windowStart(uint8 capWindow, uint8 capWindowCount, uint256 timeOfDay, uint256 anchorDow, uint256 ts) internal pure returns (uint256) {
         uint256 n = capWindowCount == 0 ? 1 : capWindowCount; // 0 treated as 1
         uint256 off = timeOfDay >= 1 days ? 0 : timeOfDay;    // clamp: seconds past midnight UTC [0, 86399]
         if (capWindow == 1) {
@@ -67,39 +68,46 @@ library CampaignRulesLib {
             return (((ts - off) / 1 days / n) * n) * 1 days + off;
         }
         if (capWindow == 2) {
-            // Monday-anchored week windows, offset by `off` past Monday 00:00.
-            // Epoch day 0 (1970-01-01) was a Thursday, so Mondays are instants
-            // ≡ 4 days + off (mod 7 days). Floor to an N-week block.
-            if (ts < 4 days + off) return 0;
-            return (((ts - 4 days - off) / 7 days / n) * n) * 7 days + 4 days + off;
+            // Week windows anchored at `anchorDow` (0 = Monday .. 6 = Sunday)
+            // + `off` past that weekday's 00:00. Epoch day 0 (1970-01-01) was
+            // a Thursday: Monday ≡ 4 days, so weekday k ≡ (4 + k) days mod 7.
+            // Floor to an N-week block counted from that anchor.
+            uint256 base = 4 days + (anchorDow % 7) * 1 days + off;
+            if (ts < base) return 0;
+            return (((ts - base) / 7 days / n) * n) * 7 days + base;
         }
         if (capWindow == 3 || capWindow == 4) {
             // Calendar month/year windows. Shift by `off` first so windows
             // start at `off` past the 1st / Jan 1, then decompose normally.
             if (ts < off) return 0;
-            ts -= off;
-            // Decompose ts into a civil date, then rebuild the window's first
-            // day back to a unix timestamp.
-            uint256 z = ts / 1 days + 719_468;
-            uint256 era = z / 146_097;
-            uint256 doe = z - era * 146_097;                       // [0, 146096]
-            uint256 yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-            uint256 y = yoe + era * 400;
-            uint256 doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-            uint256 mp = (5 * doy + 2) / 153;                      // [0, 11]
-            uint256 m = mp < 10 ? mp + 3 : mp - 9;                 // [1, 12]
-            if (m <= 2) y += 1;                                    // civil year containing ts
-            if (capWindow == 3) {
-                // N-month blocks since year 0: floor((y*12 + m-1)/N)*N → month index.
-                uint256 mi = y * 12 + (m - 1);
-                mi = (mi / n) * n;
-                return _daysFromCivil(mi / 12, (mi % 12) + 1, 1) * 1 days + off;
-            }
-            // N-year blocks since year 0.
-            uint256 y0 = (y / n) * n;
-            return _daysFromCivil(y0, 1, 1) * 1 days + off;
+            return _calendarWindowStart(capWindow, n, off, ts - off);
         }
         return 0; // lifetime
+    }
+
+    /// @dev Month/year window start from an already time-of-day-shifted `ts`.
+    ///      Split out of windowStart to stay under the codegen stack limit.
+    function _calendarWindowStart(uint8 capWindow, uint256 n, uint256 off, uint256 ts) private pure returns (uint256) {
+        // Decompose ts into a civil date, then rebuild the window's first
+        // day back to a unix timestamp.
+        uint256 z = ts / 1 days + 719_468;
+        uint256 era = z / 146_097;
+        uint256 doe = z - era * 146_097;                       // [0, 146096]
+        uint256 yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+        uint256 y = yoe + era * 400;
+        uint256 doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+        uint256 mp = (5 * doy + 2) / 153;                      // [0, 11]
+        uint256 m = mp < 10 ? mp + 3 : mp - 9;                 // [1, 12]
+        if (m <= 2) y += 1;                                    // civil year containing ts
+        if (capWindow == 3) {
+            // N-month blocks since year 0: floor((y*12 + m-1)/N)*N → month index.
+            uint256 mi = y * 12 + (m - 1);
+            mi = (mi / n) * n;
+            return _daysFromCivil(mi / 12, (mi % 12) + 1, 1) * 1 days + off;
+        }
+        // N-year blocks since year 0.
+        uint256 y0 = (y / n) * n;
+        return _daysFromCivil(y0, 1, 1) * 1 days + off;
     }
 
     /// @dev Days since 1970-01-01 for a civil date (inverse of the decomposition

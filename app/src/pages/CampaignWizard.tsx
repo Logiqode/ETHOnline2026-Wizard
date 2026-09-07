@@ -42,7 +42,7 @@ const DEFAULT_RULE_VALUES: Record<string, string | number> = {
   cap: 100,
   capPeriod: 'Lifetime',
   capPeriodCount: 1,
-  capResetBasis: 'Rolling',
+  capResetBasis: 'Calendar',
   capResetWeekday: 'Monday',
   capResetDay: 1,
   capResetMonth: 'January',
@@ -221,16 +221,20 @@ export default function CampaignWizard() {
       if (capPeriod === 'Lifetime') {
         rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (lifetime)` })
       } else {
-        const basis = ruleValues.capResetBasis === 'Calendar' ? 'calendar' : 'rolling'
-        let periodLabel = `every ${capCount} ${String(capPeriod).toLowerCase()}${capCount > 1 ? 's' : ''} (${basis})`
-        if (ruleValues.capResetBasis === 'Calendar') {
+        const calendar = ruleValues.capResetBasis === 'Calendar'
+        // On-chain truth: Rolling has no window math — the launch mapping
+        // encodes it as LIFETIME. Say so instead of showing a fake period.
+        if (!calendar) {
+          rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (lifetime on-chain — rolling resets are PRODUCTION-LIMITED)` })
+        } else {
+          let periodLabel = `every ${capCount} ${String(capPeriod).toLowerCase()}${capCount > 1 ? 's' : ''}`
           const tz = timezoneAbbr(terms.timezone)
           if (capPeriod === 'Week') periodLabel += `, resets ${ruleValues.capResetWeekday} ${ruleValues.capResetTime} ${tz}`
-          else if (capPeriod === 'Month') periodLabel += `, resets on day ${ruleValues.capResetDay} ${ruleValues.capResetTime} ${tz}`
-          else if (capPeriod === 'Year') periodLabel += `, resets ${ruleValues.capResetMonth} ${ruleValues.capResetDay} ${ruleValues.capResetTime} ${tz}`
-          else periodLabel += `, resets ${ruleValues.capResetTime} ${tz}`
+          else if (capPeriod === 'Month') periodLabel += `, resets on the 1st at ${ruleValues.capResetTime} ${tz} (custom day-of-month PRODUCTION-LIMITED)`
+          else if (capPeriod === 'Year') periodLabel += `, resets Jan 1 at ${ruleValues.capResetTime} ${tz} (custom month/day PRODUCTION-LIMITED)`
+          else periodLabel += `, resets at ${ruleValues.capResetTime} ${tz}`
+          rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (${periodLabel})` })
         }
-        rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (${periodLabel})` })
       }
     }
     if (redeemCapEnabled) rows.push({ label: 'Total redeem cap', value: `${capUnit}${terms.totalRedeemCap.toLocaleString()}${capSuffix}` })
@@ -245,7 +249,16 @@ export default function CampaignWizard() {
     // rule is off), so show what actually lands on-chain — not the input box.
     const minSpendOnChain = ruleStates['min-spend'] === 'enabled' ? ruleValues.minSpend : 0
     const capOnChain = ruleStates['reward-cap'] === 'enabled' ? ruleValues.cap : 0
-    rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${minSpendOnChain} cap=${capOnChain} perTxCap=${perTxCap ?? 'none'} discountPerTxCap=${discountPerTxCap ?? 'none'}`, mono: true })
+    // Window fields exactly as encoded (mirrors backend launch mapping).
+    const windowKindMap: Record<string, number> = { Day: 1, Week: 2, Month: 3, Year: 4 }
+    const windowOn = ruleStates['reward-cap'] === 'enabled' && ruleValues.capPeriod !== 'Lifetime' && ruleValues.capResetBasis === 'Calendar'
+    const windowKind = windowOn ? windowKindMap[String(ruleValues.capPeriod)] ?? 0 : 0
+    const windowCount = windowKind > 0 ? Number(ruleValues.capPeriodCount || 1) : 0
+    const hmMatch = String(ruleValues.capResetTime ?? '00:00').match(/^(\d{1,2}):(\d{2})$/)
+    const windowTime = windowKind > 0 && hmMatch ? Number(hmMatch[1]) * 3600 + Number(hmMatch[2]) * 60 : 0
+    const dowNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    const windowDow = windowKind === 2 ? dowNames.indexOf(String(ruleValues.capResetWeekday ?? 'Monday')) : 0
+    rows.push({ label: 'Terms (on-chain)', value: `rateBps=${rateBps} minSpend=${minSpendOnChain} cap=${capOnChain} perTxCap=${perTxCap ?? 'none'} discountPerTxCap=${discountPerTxCap ?? 'none'} capWindow=${windowKind} capWindowCount=${windowCount} capWindowTime=${windowTime} capWindowDow=${windowDow}`, mono: true })
     return rows
   }, [description, terms, ruleStates, ruleValues, rewardType, rewardBlockStates, rewardValues, redeemCapEnabled, assetLabel, capUnit, capSuffix, launch])
 

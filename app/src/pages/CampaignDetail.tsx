@@ -32,6 +32,10 @@ interface EscrowState {
   capUsd: number
   perTxCapEnabled: boolean
   perTxCapUsd: number
+  capWindow: number
+  capWindowCount: number
+  capWindowTime: number
+  capWindowDow: number
   dayOfWeekEnabled: boolean
   daysOfWeek: number
   flatEnabled: boolean
@@ -123,6 +127,21 @@ const explorer = (a: string): string => `https://sepolia.basescan.org/address/${
 
 function formatDateTime(unix: number): string {
   return new Date(unix * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+// Human label for the on-chain cap-reset window (gen-5: enforced in the
+// escrow via CampaignRulesLib.windowStart). Reads ONLY decoded chain fields.
+function describeCapWindow(s: { capWindow: number; capWindowCount: number; capWindowTime: number; capWindowDow: number }): string {
+  if (!s.capWindow) return ' (lifetime — no reset)'
+  const n = s.capWindowCount || 1
+  const plural = n > 1 ? 's' : ''
+  const time = `${String(Math.floor(s.capWindowTime / 3600)).padStart(2, '0')}:${String(Math.floor((s.capWindowTime % 3600) / 60)).padStart(2, '0')}`
+  const dowNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+  if (s.capWindow === 1) return ` (every ${n > 1 ? `${n} ` : ''}day${plural}, resets ${time} UTC)`
+  if (s.capWindow === 2) return ` (every ${n > 1 ? `${n} ` : ''}week${plural}, resets ${dowNames[s.capWindowDow % 7]} ${time} UTC)`
+  if (s.capWindow === 3) return ` (every ${n > 1 ? `${n} ` : ''}month${plural}, resets on the 1st, ${time} UTC)`
+  if (s.capWindow === 4) return ` (every ${n > 1 ? `${n} ` : ''}year${plural}, resets Jan 1, ${time} UTC)`
+  return ' (lifetime — no reset)'
 }
 
 const thStyle: React.CSSProperties = { textAlign: 'left', padding: '6px 10px 6px 0', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid #e3e8ee', whiteSpace: 'nowrap' }
@@ -358,7 +377,7 @@ export default function CampaignDetail() {
             </div>
             <div className="insight-row">
               <span className="insight-label">Per-user cap</span>
-              <span className="insight-value">{onchain.capEnabled ? `$${onchain.capUsd.toFixed(2)} (lifetime — no reset window on-chain)` : 'none'}</span>
+              <span className="insight-value">{onchain.capEnabled ? `$${onchain.capUsd.toFixed(2)}${describeCapWindow(onchain)}` : 'none'}</span>
             </div>
             <div className="insight-row">
               <span className="insight-label">Day of week</span>

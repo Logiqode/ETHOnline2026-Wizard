@@ -103,6 +103,11 @@ const requestSchema = z.object({
 	amountSpent: z.number().nonnegative(),
 	timestamp: z.number().int().nonnegative(),
 	earnedInWindow: z.number().nonnegative().default(0),
+	// Window the caller computed earnedInWindow in (unix ts). When it differs
+	// from the window containing `timestamp`, the reset has rolled over and
+	// the workflow treats earnedInWindow as 0 (fresh headroom). Advisory only —
+	// the escrow's earnedInCapWindow ledger is the settlement law.
+	earnedInWindowStart: z.number().int().nonnegative().optional(),
 	items: z.array(z.string()).optional(),
 })
 export type Request = z.infer<typeof requestSchema>
@@ -142,12 +147,25 @@ export function evaluate(request: Request, campaign: EvalCampaign): { eligible: 
 	// applied as 0.
 	const raw = campaign.mechanic === 'flat' ? campaign.flatValue : (campaign.rateBps / 10_000) * request.amountSpent
 	let points = raw
-	// Per-tx cap first (independent of ledger state), then the lifetime cap —
-	// mirrors CampaignRulesLib.computePoints so the DON report matches the
-	// escrow's on-chain re-verification exactly.
+	// Per-tx cap first (independent of ledger state), then the WINDOW cap —
+	// mirrors CampaignRulesLib.computePoints + the escrow's window ledger so
+	// the DON report matches the escrow's on-chain re-verification exactly.
+	// earnedInWindow is the caller's advisory view of the CURRENT window
+	// (payload may predate a reset); the escrow's earnedInCapWindow ledger is
+	// the settlement law — onReport recomputes with its own window math.
 	if (campaign.perTxCapEnabled && points > campaign.perTxCap) points = campaign.perTxCap
 	if (campaign.capEnabled) {
-		const remaining = campaign.cap - (request.earnedInWindow ?? 0)
+		let earnedInWindow = request.earnedInWindow ?? 0
+		if (campaign.capWindow > 0) {
+			const wStart = windowStart(campaign.capWindow, campaign.capWindowCount, campaign.capWindowTime, campaign.capWindowDow, request.timestamp)
+			// A payload earnedInWindow computed in an EARLIER window is stale —
+			// the reset grants fresh headroom (matches the escrow, which returns
+			// windowEarned only when the proof's windowStart == current one).
+			if (request.earnedInWindowStart !== undefined && request.earnedInWindowStart !== wStart) {
+				earnedInWindow = 0
+			}
+		}
+		const remaining = campaign.cap - earnedInWindow
 		points = Math.min(points, Math.max(remaining, 0))
 	}
 	if (points <= 0) {
@@ -209,7 +227,11 @@ const ESCROW_TERMS_ABI = [
 					{ name: 'redeemable', type: 'bool' },
 					{ name: 'perTxCapEnabled', type: 'bool' },
 					{ name: 'perTxCap', type: 'uint256' },
-				],
+					{ name: 'capWindow', type: 'uint8' },
+					{ name: 'capWindowCount', type: 'uint8' },
+					{ name: 'capWindowTime', type: 'uint16' },
+					{ name: 'capWindowDow', type: 'uint8' },
+					],
 			},
 			{ name: 'platformFeeBps', type: 'uint256' },
 			{ name: 'platformFeeAccount', type: 'address' },
@@ -233,6 +255,52 @@ interface OnChainCampaign {
 	daysOfWeek: number
 	perTxCapEnabled: boolean
 	perTxCap: number // reward units per single transaction
+	capWindow: number // 0 lifetime, 1 day, 2 week, 3 month, 4 year (UTC calendar)
+	capWindowCount: number // N intervals (every 2 weeks → 2)
+	capWindowTime: number // seconds past midnight UTC for the reset instant
+	capWindowDow: number // week anchor weekday: 0=Mon..6=Sun
+}
+
+// TS mirror of CampaignRulesLib.windowStart — MUST match the contract exactly,
+// because the escrow's onReport re-verifies points against its own window math
+// and any divergence reverts the report. Returns the unix timestamp of the
+// start of the cap-reset window containing `ts` (0 = lifetime, never resets).
+export function windowStart(
+	capWindow: number,
+	capWindowCount: number,
+	timeOfDay: number,
+	anchorDow: number,
+	ts: number,
+): number {
+	const n = capWindowCount > 0 ? capWindowCount : 1
+	const off = timeOfDay >= 86400 ? 0 : timeOfDay
+	if (capWindow === 1) {
+		// N-day epoch-aligned blocks shifted by `off`.
+		if (ts < off) return 0
+		return (Math.floor((ts - off) / 86400 / n) * n) * 86400 + off
+	}
+	if (capWindow === 2) {
+		// Week blocks anchored at weekday (4 + anchorDow mod 7) days from the
+		// epoch (1970-01-01 = Thursday) + `off` seconds. Floor to N-week blocks.
+		const base = 4 * 86400 + (anchorDow % 7) * 86400 + off
+		if (ts < base) return 0
+		return Math.floor((ts - base) / (7 * 86400) / n) * n * 7 * 86400 + base
+	}
+	if (capWindow === 3 || capWindow === 4) {
+		// Calendar month/year blocks (UTC), shifted by `off`.
+		if (ts < off) return 0
+		const d = new Date((ts - off) * 1000)
+		let months = d.getUTCFullYear() * 12 + d.getUTCMonth() // months since year 0
+		months = Math.floor(months / n) * n
+		if (capWindow === 3) {
+			const y = Math.floor(months / 12)
+			const m = months % 12
+			return Date.UTC(y, m, 1) / 1000 + off
+		}
+		const y = Math.floor(months / 12)
+		return Date.UTC(y, 0, 1) / 1000 + off
+	}
+	return 0 // lifetime
 }
 
 function getEvmClient(chainName: string) {
@@ -295,6 +363,10 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 		redeemable: boolean
 		perTxCapEnabled: boolean
 		perTxCap: bigint
+		capWindow: number
+		capWindowCount: number
+		capWindowTime: number
+		capWindowDow: number
 	}
 	const rules: RulesShape = Array.isArray(rawRules)
 		? {
@@ -309,6 +381,10 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 				redeemable: rawRules[8] as boolean,
 				perTxCapEnabled: rawRules[9] as boolean,
 				perTxCap: rawRules[10] as bigint,
+				capWindow: rawRules[11] as number,
+				capWindowCount: rawRules[12] as number,
+				capWindowTime: rawRules[13] as number,
+				capWindowDow: rawRules[14] as number,
 			}
 		: (rawRules as RulesShape)
 	const { minSpendEnabled: minSpendOn, minSpend: minSpendWei, capEnabled: capOn, cap: capWei, dayOfWeekEnabled: dowOn, daysOfWeek: dowMask } = rules
@@ -331,6 +407,10 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 		daysOfWeek: dowMask,
 		perTxCapEnabled: rules.perTxCapEnabled,
 		perTxCap: rules.perTxCapEnabled ? usd(rules.perTxCap) : 0,
+		capWindow: rules.capWindow,
+		capWindowCount: rules.capWindowCount,
+		capWindowTime: rules.capWindowTime,
+		capWindowDow: rules.capWindowDow,
 	}
 }
 

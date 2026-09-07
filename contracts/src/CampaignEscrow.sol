@@ -369,7 +369,7 @@ contract CampaignEscrow {
         // this wallet's last earn, restart the window accumulator. (Window
         // boundaries come from CampaignRulesLib.windowStart — calendar-aligned
         // UTC; lifetime campaigns never roll.)
-        uint256 wStart = CampaignRulesLib.windowStart(terms.rules.capWindow, terms.rules.capWindowCount, terms.rules.capWindowTime, block.timestamp);
+        uint256 wStart = CampaignRulesLib.windowStart(terms.rules.capWindow, terms.rules.capWindowCount, terms.rules.capWindowTime, terms.rules.capWindowDow, block.timestamp);
         if (proof.windowStart != wStart) {
             proof.windowStart = wStart;
             proof.windowEarned = 0;
@@ -402,7 +402,7 @@ contract CampaignEscrow {
     function _earnedForCap(address wallet) internal view returns (uint256) {
         CampaignProof storage proof = campaignLedger[terms.rewardTokenId][wallet];
         if (terms.rules.capWindow == 0) return proof.totalBalance;
-        uint256 wStart = CampaignRulesLib.windowStart(terms.rules.capWindow, terms.rules.capWindowCount, terms.rules.capWindowTime, block.timestamp);
+        uint256 wStart = CampaignRulesLib.windowStart(terms.rules.capWindow, terms.rules.capWindowCount, terms.rules.capWindowTime, terms.rules.capWindowDow, block.timestamp);
         return proof.windowStart == wStart ? proof.windowEarned : 0;
     }
 
