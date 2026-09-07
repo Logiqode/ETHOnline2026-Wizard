@@ -51,7 +51,9 @@ contract CampaignWorkflowTest is Test {
                 daysOfWeek: 0,
                 flatEnabled: false,
                 flatValue: 0,
-                redeemable: true
+                redeemable: true,
+                perTxCapEnabled: false,
+                perTxCap: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -179,6 +181,57 @@ contract CampaignWorkflowTest is Test {
         // Next claim > cap → revert (remaining == 0)
         vm.expectRevert(); // CapExceeded / ZeroPoints
         CampaignEscrow(escrowAddr).claim(keccak256("n2"), customer, 12e18);
+        vm.stopPrank();
+    }
+
+    /// @notice Per-tx cap clamps a single transaction's reward regardless of
+    ///         ledger state; the lifetime cap still applies on top.
+    function test_PerTxCapClampsSingleClaim() public {
+        uint64 start = uint64(block.timestamp - 1 days);
+        uint64 end = uint64(block.timestamp + 30 days);
+        // Deploy with min-spend off, lifetime cap on ($100), per-tx cap $50.
+        CampaignEscrow.CampaignTerms memory terms = CampaignEscrow.CampaignTerms({
+            rateBps: RATE_BPS, // 10%
+            start: start,
+            end: end,
+            reward: address(0),
+            rewardTokenId: 0,
+            rules: CampaignRulesLib.Rules({
+                minSpendEnabled: false,
+                minSpend: 0,
+                capEnabled: true,
+                cap: 100e18,
+                dayOfWeekEnabled: false,
+                daysOfWeek: 0,
+                flatEnabled: false,
+                flatValue: 0,
+                redeemable: true,
+                perTxCapEnabled: true,
+                perTxCap: 50e18
+            }),
+            platformFeeBps: PLATFORM_FEE_BPS,
+            platformFeeAccount: PLATFORM_FEE_ACCOUNT
+        });
+        uint256 id = _createCampaign(terms, workflowOwner, "https://example.com/metadata/{id}.json", keccak256("per-tx-cap"));
+        (address esc, , , , ) = factory.campaigns(id);
+
+        // $300 spend → 10% = $30… wait, that is UNDER the $50 per-tx cap. Use
+        // $800: 10% = $80 → clamped to the $50 per-tx cap.
+        vm.startPrank(workflowOwner);
+        uint256 p1 = CampaignEscrow(esc).claim(keccak256("tx-1"), customer, 800e18);
+        assertEq(p1, 50e18, "per-tx cap clamps 80 to 50");
+
+        // Preview must mirror the same math (what the DON report is checked against).
+        assertEq(CampaignEscrow(esc).computePointsPreview(800e18, 50e18), 50e18, "preview clamps too");
+
+        // Exactly at the per-tx boundary: 10% of $500 = $50 → no clamp, full 50.
+        uint256 p2 = CampaignEscrow(esc).claim(keccak256("tx-2"), customer, 500e18);
+        assertEq(p2, 50e18, "boundary tx earns exactly the per-tx cap");
+
+        // Lifetime cap interplay: earned 100 = cap → next claim reverts even
+        // though each individual tx was within the per-tx cap.
+        vm.expectRevert(); // CapExceeded
+        CampaignEscrow(esc).claim(keccak256("tx-3"), customer, 100e18);
         vm.stopPrank();
     }
 
@@ -337,7 +390,9 @@ contract CampaignWorkflowTest is Test {
                 daysOfWeek: daysOfWeek,
                 flatEnabled: false,
                 flatValue: 0,
-                redeemable: true
+                redeemable: true,
+                perTxCapEnabled: false,
+                perTxCap: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT
@@ -370,7 +425,9 @@ contract CampaignWorkflowTest is Test {
                 daysOfWeek: 0,
                 flatEnabled: flatOn,
                 flatValue: flatValue,
-                redeemable: redeemable
+                redeemable: redeemable,
+                perTxCapEnabled: false,
+                perTxCap: 0
             }),
             platformFeeBps: PLATFORM_FEE_BPS,
             platformFeeAccount: PLATFORM_FEE_ACCOUNT

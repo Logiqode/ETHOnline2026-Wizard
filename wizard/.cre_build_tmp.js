@@ -23440,6 +23440,8 @@ function evaluate(request, campaign) {
   }
   const raw = campaign.mechanic === "flat" ? campaign.flatValue : campaign.rateBps / 1e4 * request.amountSpent;
   let points = raw;
+  if (campaign.perTxCapEnabled && points > campaign.perTxCap)
+    points = campaign.perTxCap;
   if (campaign.capEnabled) {
     const remaining = campaign.cap - (request.earnedInWindow ?? 0);
     points = Math.min(points, Math.max(remaining, 0));
@@ -23492,7 +23494,9 @@ var ESCROW_TERMS_ABI = [
           { name: "daysOfWeek", type: "uint8" },
           { name: "flatEnabled", type: "bool" },
           { name: "flatValue", type: "uint256" },
-          { name: "redeemable", type: "bool" }
+          { name: "redeemable", type: "bool" },
+          { name: "perTxCapEnabled", type: "bool" },
+          { name: "perTxCap", type: "uint256" }
         ]
       },
       { name: "platformFeeBps", type: "uint256" },
@@ -23543,7 +23547,9 @@ function readCampaignOnChain(runtime2, evmClient, campaignId) {
     daysOfWeek: rawRules[5],
     flatEnabled: rawRules[6],
     flatValue: rawRules[7],
-    redeemable: rawRules[8]
+    redeemable: rawRules[8],
+    perTxCapEnabled: rawRules[9],
+    perTxCap: rawRules[10]
   } : rawRules;
   const { minSpendEnabled: minSpendOn, minSpend: minSpendWei, capEnabled: capOn, cap: capWei, dayOfWeekEnabled: dowOn, daysOfWeek: dowMask } = rules;
   const usd = (wei) => Number(wei) / 1000000000000000000;
@@ -23560,7 +23566,9 @@ function readCampaignOnChain(runtime2, evmClient, campaignId) {
     minSpendEnabled: minSpendOn,
     capEnabled: capOn,
     dayOfWeekEnabled: dowOn,
-    daysOfWeek: dowMask
+    daysOfWeek: dowMask,
+    perTxCapEnabled: rules.perTxCapEnabled,
+    perTxCap: rules.perTxCapEnabled ? usd(rules.perTxCap) : 0
   };
 }
 function deriveNullifier(master, campaignId, userAnchor, timestamp) {

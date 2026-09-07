@@ -142,6 +142,10 @@ export function evaluate(request: Request, campaign: EvalCampaign): { eligible: 
 	// applied as 0.
 	const raw = campaign.mechanic === 'flat' ? campaign.flatValue : (campaign.rateBps / 10_000) * request.amountSpent
 	let points = raw
+	// Per-tx cap first (independent of ledger state), then the lifetime cap —
+	// mirrors CampaignRulesLib.computePoints so the DON report matches the
+	// escrow's on-chain re-verification exactly.
+	if (campaign.perTxCapEnabled && points > campaign.perTxCap) points = campaign.perTxCap
 	if (campaign.capEnabled) {
 		const remaining = campaign.cap - (request.earnedInWindow ?? 0)
 		points = Math.min(points, Math.max(remaining, 0))
@@ -203,6 +207,8 @@ const ESCROW_TERMS_ABI = [
 					{ name: 'flatEnabled', type: 'bool' },
 					{ name: 'flatValue', type: 'uint256' },
 					{ name: 'redeemable', type: 'bool' },
+					{ name: 'perTxCapEnabled', type: 'bool' },
+					{ name: 'perTxCap', type: 'uint256' },
 				],
 			},
 			{ name: 'platformFeeBps', type: 'uint256' },
@@ -225,6 +231,8 @@ interface OnChainCampaign {
 	capEnabled: boolean
 	dayOfWeekEnabled: boolean
 	daysOfWeek: number
+	perTxCapEnabled: boolean
+	perTxCap: number // reward units per single transaction
 }
 
 function getEvmClient(chainName: string) {
@@ -285,6 +293,8 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 		flatEnabled: boolean
 		flatValue: bigint
 		redeemable: boolean
+		perTxCapEnabled: boolean
+		perTxCap: bigint
 	}
 	const rules: RulesShape = Array.isArray(rawRules)
 		? {
@@ -297,6 +307,8 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 				flatEnabled: rawRules[6] as boolean,
 				flatValue: rawRules[7] as bigint,
 				redeemable: rawRules[8] as boolean,
+				perTxCapEnabled: rawRules[9] as boolean,
+				perTxCap: rawRules[10] as bigint,
 			}
 		: (rawRules as RulesShape)
 	const { minSpendEnabled: minSpendOn, minSpend: minSpendWei, capEnabled: capOn, cap: capWei, dayOfWeekEnabled: dowOn, daysOfWeek: dowMask } = rules
@@ -317,6 +329,8 @@ function readCampaignOnChain(runtime: Runtime<Config>, evmClient: ReturnType<typ
 		capEnabled: capOn,
 		dayOfWeekEnabled: dowOn,
 		daysOfWeek: dowMask,
+		perTxCapEnabled: rules.perTxCapEnabled,
+		perTxCap: rules.perTxCapEnabled ? usd(rules.perTxCap) : 0,
 	}
 }
 

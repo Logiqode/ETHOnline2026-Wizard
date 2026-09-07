@@ -12,7 +12,7 @@ import { join } from 'node:path'
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com'
 
 export const factoryAbi = parseAbi([
-  'function createCampaign((uint256 rateBps, uint64 start, uint64 end, address reward, uint256 rewardTokenId, (bool minSpendEnabled, uint256 minSpend, bool capEnabled, uint256 cap, bool dayOfWeekEnabled, uint8 daysOfWeek, bool flatEnabled, uint256 flatValue, bool redeemable) rules, uint256 platformFeeBps, address platformFeeAccount) terms, address workflowOwner, address reportOwner, string rewardUri, bytes32 salt, address companyA, address companyB, uint256 feeSplitBps) returns (uint256 campaignId)',
+  'function createCampaign((uint256 rateBps, uint64 start, uint64 end, address reward, uint256 rewardTokenId, (bool minSpendEnabled, uint256 minSpend, bool capEnabled, uint256 cap, bool dayOfWeekEnabled, uint8 daysOfWeek, bool flatEnabled, uint256 flatValue, bool redeemable, bool perTxCapEnabled, uint256 perTxCap) rules, uint256 platformFeeBps, address platformFeeAccount) terms, address workflowOwner, address reportOwner, string rewardUri, bytes32 salt, address companyA, address companyB, uint256 feeSplitBps) returns (uint256 campaignId)',
   'function campaigns(uint256) view returns (address escrow, address reward, uint256 rewardTokenId, uint64 start, uint64 end)',
   'function nextCampaignId() view returns (uint256)',
   'function MIN_OPERATING_DEPOSIT() view returns (uint256)',
@@ -52,6 +52,8 @@ export interface TermsInput {
   flatEnabled: boolean   // reward mechanic: false = percent (rateBps), true = flat (flatValue per purchase)
   flatValueWei: bigint   // flat cashback per qualifying purchase (18-decimals reward units)
   redeemable: boolean    // false = discount proof-of-savings (totalSaved counter only, nothing spendable)
+  perTxCapEnabled: boolean // cap the reward earned by a SINGLE transaction
+  perTxCapWei: bigint    // per-transaction reward cap (18-decimals reward units)
 }
 
 export interface CreateCampaignArgs {
@@ -111,6 +113,8 @@ export async function createCampaignOnChain(args: CreateCampaignArgs): Promise<C
       flatEnabled: t.flatEnabled,
       flatValue: t.flatValueWei,
       redeemable: t.redeemable,
+      perTxCapEnabled: t.perTxCapEnabled,
+      perTxCap: t.perTxCapWei,
     },
     platformFeeBps: 0n,
     platformFeeAccount: '0x0000000000000000000000000000000000000000' as Address,

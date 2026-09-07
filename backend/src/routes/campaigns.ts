@@ -220,6 +220,15 @@ campaigns.post('/:id/launch', async (c) => {
   const rateBps = flatEnabled ? 0 : Math.round(Number(rv.cashbackRate ?? 0) * 100)
   const flatValueWei = flatEnabled ? usdToWei(Number(rv.cashbackFlat ?? 0)) : 0n
   const redeemable = mechanics?.rewardType !== 'discount'
+  // Per-transaction cap (now on-chain in Rules). For percent cashback the UI
+  // value is in reward units ($); for percent discounts it's a % of spend —
+  // same semantics the wizard displays. Off when the toggle is off.
+  const cashbackPerTxCapOn = redeemable && rv.cashbackPerTxCapEnabled === true
+  const discountPerTxCapOn = !redeemable && rv.discountPerTxCapEnabled === true
+  const perTxCapEnabled = cashbackPerTxCapOn || discountPerTxCapOn
+  const perTxCapWei = perTxCapEnabled
+    ? usdToWei(Number((cashbackPerTxCapOn ? rv.cashbackPerTxCap : rv.discountPerTxCap) ?? 0))
+    : 0n
 
   let onchain
   try {
@@ -237,7 +246,14 @@ campaigns.post('/:id/launch', async (c) => {
         flatEnabled,
         flatValueWei,
         redeemable,
+        perTxCapEnabled,
+        perTxCapWei,
       },
+      // The DON stamps the CRE *registry* owner (workflow deployer EOA) into
+      // report metadata; the escrow's reportOwner must match or onReport
+      // reverts (silently — forwarder logs success=00, nothing mints). Factory
+      // default is workflowOwner, which differs → pass it explicitly.
+      reportOwner: (process.env.WORKFLOW_OWNER_ADDRESS || deployment?.deployer) as Address,
       workflowOwner: (process.env.WORKFLOW_OWNER_ADDRESS || deployment?.deployer) as Address,
       rewardUri: process.env.REWARD_URI || 'https://wizard.example/api/metadata/{id}.json',
       salt: salt as Hex,

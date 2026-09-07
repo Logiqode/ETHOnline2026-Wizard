@@ -115,7 +115,7 @@ cd contracts
 # Build
 ~/.foundry/bin/forge build          # or: forge build (if on PATH)
 
-# Run the test suite (26 tests: claim, cap, nullifier, window,
+# Run the test suite (47 tests: claim, lifetime cap, per-tx cap clamp, nullifier, window,
 # redeem/redeemFor, redeemer whitelist, decimal guard, factory wiring,
 # per-rule deployment shapes, and parallel campaigns with different rule mixes)
 ~/.foundry/bin/forge test           # or: forge test
@@ -220,7 +220,7 @@ Simulation output shows the handler's `runtime.log` lines (debug only — remove
 
 ### Mock payloads
 
-Per-campaign POS payloads live in `wizard/test-payloads/` (one file per campaign × scenario). Campaign terms are **read on-chain at request time** from the deployed factory (`0xf60c0882605E3A43e4983f79D775ba333be69acC` on Base Sepolia, recorded in `contracts/deployments/base-sepolia.json`) — new campaigns are picked up with zero workflow redeploys.
+Per-campaign POS payloads live in `wizard/test-payloads/` (one file per campaign × scenario). Campaign terms are **read on-chain at request time** from the deployed factory (`0x29761A6ef856fc1Af6b8EABD91708aDA8D656D31` on Base Sepolia, recorded in `contracts/deployments/base-sepolia.json`) — new campaigns are picked up with zero workflow redeploys.
 
 ## Deployed contracts (Base Sepolia, chain 84532)
 
@@ -230,31 +230,30 @@ Recorded in `contracts/deployments/base-sepolia.json` (rewritten by the deploy s
 
 | Contract | Address |
 |---|---|
-| `CampaignFactory` | [`0xA563808fEb15469D67d671b60b437edD850A6196`](https://sepolia.basescan.org/address/0xA563808fEb15469D67d671b60b437edD850A6196) |
-| `CampaignEscrow` (implementation; campaigns are EIP-1167 clones of it) | [`0xD42ae67201181c642Ca15854E136Ec9c2b1ECDf2`](https://sepolia.basescan.org/address/0xD42ae67201181c642Ca15854E136Ec9c2b1ECDf2) |
+| `CampaignFactory` | [`0x29761A6ef856fc1Af6b8EABD91708aDA8D656D31`](https://sepolia.basescan.org/address/0x29761A6ef856fc1Af6b8EABD91708aDA8D656D31) |
+| `CampaignEscrow` (implementation; campaigns are EIP-1167 clones of it) | [`0x5b4136949014075f279b9b5b1cE178b325643fEA`](https://sepolia.basescan.org/address/0x5b4136949014075f279b9b5b1cE178b325643fEA) |
 | CRE Forwarder (Chainlink's production forwarder, not ours) | [`0xF8344CFd5c43616a4366C34E3EEE75af79a74482`](https://sepolia.basescan.org/address/0xF8344CFd5c43616a4366C34E3EEE75af79a74482) |
 
-**Demo campaigns (1–3 seeded via `contracts/script/SeedCampaigns.s.sol`; 4 = the first wizard-launched campaign)**
+**Demo campaigns (seeded via `contracts/script/SeedCampaigns.s.sol` on the current factory)**
 
 | # | Escrow clone | Reward (ERC-1155) |
 |---|---|---|
-| 1 | [`0x8f6aDcBf3a492a448e06eD2249146350b7535D33`](https://sepolia.basescan.org/address/0x8f6aDcBf3a492a448e06eD2249146350b7535D33) | [`0x5Ecc1B878032cb8185FCBd0079E9eCE34e32F92a`](https://sepolia.basescan.org/address/0x5Ecc1B878032cb8185FCBd0079E9eCE34e32F92a) |
-| 2 | [`0x089b4D0d09884dF07332E3eA68009B304ac13FAc`](https://sepolia.basescan.org/address/0x089b4D0d09884dF07332E3eA68009B304ac13FAc) | [`0x4080376ab2Ae3BCd19387ac2Fcf10db4c7F66108`](https://sepolia.basescan.org/address/0x4080376ab2Ae3BCd19387ac2Fcf10db4c7F66108) |
-| 3 | [`0xb4b3eEd3AD298aBDFB56A299839d6B7422F92273`](https://sepolia.basescan.org/address/0xb4b3eEd3AD298aBDFB56A299839d6B7422F92273) | [`0x537346037296fAc0Af2ed39eBd073f8946384aD3`](https://sepolia.basescan.org/address/0x537346037296fAc0Af2ed39eBd073f8946384aD3) |
-| 4 | [`0xE63DC2d8f267C387B22f2ADa949D1B5486aA5c2B`](https://sepolia.basescan.org/address/0xE63DC2d8f267C387B22f2ADa949D1B5486aA5c2B) | [`0x9C83d9a60b7bbA0FB8838E62de14199AE513CB84`](https://sepolia.basescan.org/address/0x9C83d9a60b7bbA0FB8838E62de14199AE513CB84) |
+| 1 | [`0x2e5b4AeDEB3d81744Ad0CD1e4f88c7Ca5EF5C34f`](https://sepolia.basescan.org/address/0x2e5b4AeDEB3d81744Ad0CD1e4f88c7Ca5EF5C34f) | [`0xaE84c89A626E6828568D5700be0CE0Bd4E22d753`](https://sepolia.basescan.org/address/0xaE84c89A626E6828568D5700be0CE0Bd4E22d753) |
+| 2 | [`0x737E773d6D6Af30861522F7E9FFfE3c53B9772E7`](https://sepolia.basescan.org/address/0x737E773d6D6Af30861522F7E9FFfE3c53B9772E7) | [`0x30674273509f0d6EAD08fC2B7d5669c54546437B`](https://sepolia.basescan.org/address/0x30674273509f0d6EAD08fC2B7d5669c54546437B) |
+| 3 | [`0xEc9db2eB33780566cd35C67366Ee6457308b87D2`](https://sepolia.basescan.org/address/0xEc9db2eB33780566cd35C67366Ee6457308b87D2) | [`0x495B883Da6561b641432b1699F09D6D1B476CD02`](https://sepolia.basescan.org/address/0x495B883Da6561b641432b1699F09D6D1B476CD02) |
 
 **Key transactions**
 
 | What | Tx |
 |---|---|
-| Deploy `CampaignEscrow` implementation | [`0xf7682d530f674c2244ecd57e1b4382b609fbf810f6438ae7b5e4405ae9429fa4`](https://sepolia.basescan.org/tx/0xf7682d530f674c2244ecd57e1b4382b609fbf810f6438ae7b5e4405ae9429fa4) |
-| Deploy `CampaignFactory` | [`0x8d93a6636484fc79ecd5e39a4de28c74fbd0b423ff2184939e1d73f542e3c2f2`](https://sepolia.basescan.org/tx/0x8d93a6636484fc79ecd5e39a4de28c74fbd0b423ff2184939e1d73f542e3c2f2) |
-| Seed campaign 1 | [`0x1b9ecd72145ea7cc4d652a251bf829c22636de6b61e1e19417c94368d0e9da76`](https://sepolia.basescan.org/tx/0x1b9ecd72145ea7cc4d652a251bf829c22636de6b61e1e19417c94368d0e9da76) |
-| Seed campaign 2 | [`0x3f70d9aa3c2277cc08acdd6afd77eef28707d0f973d12dd04732d81408ff1114`](https://sepolia.basescan.org/tx/0x3f70d9aa3c2277cc08acdd6afd77eef28707d0f973d12dd04732d81408ff1114) |
-| Seed campaign 3 | [`0xb752647ef503d804c40d3e9c3b5ac76de74be05c21c7e5786a72642e6e42a75a`](https://sepolia.basescan.org/tx/0xb752647ef503d804c40d3e9c3b5ac76de74be05c21c7e5786a72642e6e42a75a) |
+| Deploy `CampaignEscrow` implementation (gen-4) | [`0x3247cd083b8a974c87123aa1694b5bf5f0834857bbba6b804c2ea017c00c50ab`](https://sepolia.basescan.org/tx/0x3247cd083b8a974c87123aa1694b5bf5f0834857bbba6b804c2ea017c00c50ab) |
+| Deploy `CampaignFactory` (gen-4) | [`0x5e7e7ed2d233b640dc48e0ef9b77e039daa28088018b8213ebd1a5c759163765`](https://sepolia.basescan.org/tx/0x5e7e7ed2d233b640dc48e0ef9b77e039daa28088018b8213ebd1a5c759163765) |
+| Seed campaign 1 (gen-4) | [`0xcce1117401fe258fe28dad14c508ba4c34a644c84598290d7de4e1d6862db914`](https://sepolia.basescan.org/tx/0xcce1117401fe258fe28dad14c508ba4c34a644c84598290d7de4e1d6862db914) |
+| Seed campaign 2 (gen-4) | [`0xfd0d47750684fbde4e5cff45f847e518b2b96aa6ab8ad490e2f2cf093acb1381`](https://sepolia.basescan.org/tx/0xfd0d47750684fbde4e5cff45f847e518b2b96aa6ab8ad490e2f2cf093acb1381) |
+| Seed campaign 3 (gen-4) | [`0x9cdfffc6407aef993884fa971b878e0830a496d3b045d47ed1127802336f45fe`](https://sepolia.basescan.org/tx/0x9cdfffc6407aef993884fa971b878e0830a496d3b045d47ed1127802336f45fe) |
 | **End-to-end claim** (DON report → escrow `Claim` + ERC-1155 mint, `ReportProcessed success=true`) | [`0x7903f511099c7c182dd017195dd35a45a0986b809c972d224c208e83ce65f9c2`](https://sepolia.basescan.org/tx/0x7903f511099c7c182dd017195dd35a45a0986b809c972d224c208e83ce65f9c2) |
 
-**CRE workflow**: `wizard-staging`, workflow ID `00e8a289eeef0a8f5d13b00b6d6a617853de65e2750309321d57e7b149c98f05` (gen-3: reads the gen-3 factory `0xA563…6196`; private registry, zone-a DON family, owner `0x8996097709d886abD468511BfB5A7279110e15d8`; nullifier includes the payload timestamp — see the privacy notes below). Fired via the signed-relay path (see `backend/scripts/trigger.ts`).
+**CRE workflow**: `wizard-staging`, workflow ID `00bb968357d59824dc9e1fb1c0ef29b33e8571faa1542ce76a54464d2cc2d86c` (gen-4: reads the gen-4 factory `0x2976…6D31`; on-chain per-tx cap; private registry, zone-a DON family, owner `0x8996097709d886abD468511BfB5A7279110e15d8`; nullifier includes the payload timestamp — see the privacy notes below). Fired via the signed-relay path (see `backend/scripts/trigger.ts`).
 
 ### Deploying from scratch
 
@@ -289,7 +288,7 @@ cre workflow deploy ./wizard --target=staging-settings
 
 The deploy output prints the registry owner (use it as `WORKFLOW_OWNER` in step 2 if you haven't seeded yet) and the new **workflow ID**. Wait ~90s for gateway propagation before firing payloads.
 
-**4. Wire the backend**: put the new workflow ID in `.env` as `WORKFLOW_ID=0x…`, and set `WORKFLOW_OWNER_ADDRESS` (the claim-submitting EOA) so wizard-launched campaigns get the right `workflowOwner`.
+**4. Wire the backend**: put the new workflow ID in `.env` as `WORKFLOW_ID=0x…`, and set `WORKFLOW_OWNER_ADDRESS` (the claim-submitting EOA) so wizard-launched campaigns get the right `workflowOwner`. The launch route passes the **same** value as `reportOwner` too — wizard-created escrows therefore match the DON-stamped registry owner automatically (the step-2 pitfall can't recur through the wizard path). Per-transaction caps configured in the wizard (cashback/discount per-tx cap) are also encoded into the escrow's on-chain rules at launch and clamped in `computePoints` — the DON's points math and the escrow's re-verification stay identical.
 
 **5. Register the seeded campaigns in the DB** (their on-chain state exists but Postgres has no rows yet):
 

@@ -31,6 +31,8 @@ library CampaignRulesLib {
         bool   flatEnabled;      // reward mechanic: false = percent (rateBps% of spend), true = flat (flatValue per purchase)
         uint256 flatValue;       // flat cashback per qualifying purchase (18-decimals reward units)
         bool   redeemable;       // true = cashback (points spendable at a POS); false = discount proof-of-savings (totalSaved only, nothing redeemable)
+        bool   perTxCapEnabled;  // cap the reward earned by a SINGLE transaction
+        uint256 perTxCap;        // per-transaction reward cap (18-decimals reward units)
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -56,6 +58,9 @@ library CampaignRulesLib {
         uint256 alreadyEarned
     ) internal pure returns (uint256 points) {
         points = r.flatEnabled ? r.flatValue : (rateBps * amountSpent) / 10_000;
+        // Per-transaction cap first (independent of ledger state), then the
+        // per-user lifetime cap. Tightest wins.
+        if (r.perTxCapEnabled && points > r.perTxCap) points = r.perTxCap;
         if (!r.capEnabled) return points;
         uint256 remaining = r.cap - alreadyEarned;
         points = points > remaining ? remaining : points;

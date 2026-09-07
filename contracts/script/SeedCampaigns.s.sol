@@ -45,7 +45,8 @@ contract SeedCampaigns is Script {
                 minSpendEnabled: true, minSpend: 10e18,
                 capEnabled: true, cap: 100e18,
                 dayOfWeekEnabled: false, daysOfWeek: 0,
-                flatEnabled: false, flatValue: 0, redeemable: true
+                flatEnabled: false, flatValue: 0, redeemable: true,
+                perTxCapEnabled: false, perTxCap: 0
             }),
             platformFeeBps: 0,
             platformFeeAccount: address(0)
@@ -63,7 +64,8 @@ contract SeedCampaigns is Script {
                 minSpendEnabled: true, minSpend: 10e18,
                 capEnabled: false, cap: 0,
                 dayOfWeekEnabled: false, daysOfWeek: 0,
-                flatEnabled: true, flatValue: 2e18, redeemable: true
+                flatEnabled: true, flatValue: 2e18, redeemable: true,
+                perTxCapEnabled: false, perTxCap: 0
             }),
             platformFeeBps: 0,
             platformFeeAccount: address(0)
@@ -81,7 +83,8 @@ contract SeedCampaigns is Script {
                 minSpendEnabled: true, minSpend: 10e18,
                 capEnabled: false, cap: 0,
                 dayOfWeekEnabled: false, daysOfWeek: 0,
-                flatEnabled: true, flatValue: 5e18, redeemable: false
+                flatEnabled: true, flatValue: 5e18, redeemable: false,
+                perTxCapEnabled: false, perTxCap: 0
             }),
             platformFeeBps: 0,
             platformFeeAccount: address(0)
