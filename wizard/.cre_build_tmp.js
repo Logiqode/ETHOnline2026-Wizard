@@ -23586,18 +23586,10 @@ var onHTTPTrigger = (runtime2, payload) => {
     runtime2.log(`ineligible (${verdict.reason}) — no on-chain write`);
     return `REJECT points=0 reason=${verdict.reason}`;
   }
-  const innerReport = encodeAbiParameters(parseAbiParameters("bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei"), [nullifier, request.userAnchor, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)]);
-  const workflowOwner = getWorkflowOwnerAddress(config);
-  const metadata = encodeAbiParameters(parseAbiParameters("bytes32 workflowId"), [WORKFLOW_ID]);
-  const metadataPacked = metadata + toHex(toBytes(workflowName10(workflowOwner))).slice(2).padStart(60, "0");
-  const callData = encodeFunctionData({
-    abi: ESCROW_ONREPORT_ABI,
-    functionName: "onReport",
-    args: [metadataPacked, innerReport]
-  });
+  const reportPayload = encodeAbiParameters(parseAbiParameters("bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei"), [nullifier, request.userAnchor, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)]);
   const donRuntime = runtime2.usingTheDons();
   const reportResponse = donRuntime.report({
-    encodedPayload: hexToBase64(callData),
+    encodedPayload: hexToBase64(reportPayload),
     encoderName: "evm",
     signingAlgo: "ecdsa",
     hashingAlgo: "keccak256"
@@ -23612,28 +23604,6 @@ var onHTTPTrigger = (runtime2, payload) => {
   }
   return `APPROVE points=${verdict.points} reason=${verdict.reason}`;
 };
-var WORKFLOW_ID = keccak256(toHex("wizard-workflow-v1"));
-var WORKFLOW_NAME = "wizard";
-function workflowName10(owner) {
-  const name = toHex(WORKFLOW_NAME).slice(2).padStart(20, "0").slice(0, 20);
-  const ownerPacked = toHex(owner).slice(2);
-  return `0x${name}${ownerPacked}`;
-}
-function getWorkflowOwnerAddress(config) {
-  return config.workflowOwnerAddress;
-}
-var ESCROW_ONREPORT_ABI = [
-  {
-    name: "onReport",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "metadata", type: "bytes" },
-      { name: "report", type: "bytes" }
-    ],
-    outputs: []
-  }
-];
 function initWorkflow(config) {
   const httpTrigger = new cre.capabilities.HTTPCapability;
   return [

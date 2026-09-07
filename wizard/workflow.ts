@@ -368,32 +368,24 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 		return `REJECT points=0 reason=${verdict.reason}`
 	}
 
-	// The report body IS the call data the forwarder executes against the
-	// receiver: encode escrow.onReport(metadata, report) fully off-chain.
-	// metadata = abi.encodePacked(workflowId(32) || workflowName(10) || workflowOwner(20));
+	// The report payload is ONLY the ABI-encoded report body — the CRE Forwarder
+	// wraps it with its own metadata (workflowId(32) || workflowName(10) ||
+	// workflowOwner(20), abi.encodePacked) and calls escrow.onReport(metadata, report).
+	// Verified against the ReceiverTemplate ("encoded using abi.encodePacked by the
+	// Forwarder") and the ai-audit-firewall reference (payload = encodeAbiParameters
+	// of the fields, no onReport calldata wrapping). Wrapping onReport(...) calldata
+	// here makes the escrow see a 356-byte "report" that fails its length check.
 	// report = abi.encode(nullifier, recipient, amountSpentWei, eligible, pointsWei).
-	const innerReport = encodeAbiParameters(
+	const reportPayload = encodeAbiParameters(
 		parseAbiParameters('bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei'),
 		[nullifier, request.userAnchor as `0x${string}`, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)],
 	)
-	const workflowOwner = getWorkflowOwnerAddress(config)
-	const metadata = encodeAbiParameters(
-		parseAbiParameters('bytes32 workflowId'),
-		[WORKFLOW_ID],
-	)
-	// workflowName(10) || workflowOwner(20) appended packed after the 32-byte id.
-	const metadataPacked = (metadata + toHex(toBytes(workflowName10(workflowOwner))).slice(2).padStart(60, '0')) as `0x${string}`
-	const callData = encodeFunctionData({
-		abi: ESCROW_ONREPORT_ABI,
-		functionName: 'onReport',
-		args: [metadataPacked, innerReport],
-	})
 
 	// Cross back to the DON for consensus (DON signs the report), then write it.
 	const donRuntime = runtime.usingTheDons()
 	const reportResponse = donRuntime
 		.report({
-			encodedPayload: hexToBase64(callData),
+			encodedPayload: hexToBase64(reportPayload),
 			encoderName: 'evm',
 			signingAlgo: 'ecdsa',
 			hashingAlgo: 'keccak256',
@@ -417,38 +409,12 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 	return `APPROVE points=${verdict.points} reason=${verdict.reason}`
 }
 
-// ─── Workflow identity (pinned into report metadata) ───────────
-// The escrow's onReport checks metadata.workflowOwner === terms.workflowOwner.
-// 32-byte workflow id assigned at `cre workflow deploy` (stable placeholder for
-// local simulation; update after first deploy to the registry-issued id).
-const WORKFLOW_ID = keccak256(toHex('wizard-workflow-v1'))
-const WORKFLOW_NAME = 'wizard' // bytes10 in metadata
-
-function workflowName10(owner: string): `0x${string}` {
-	// metadata = workflowId(32) || workflowName(10) || workflowOwner(20)
-	const name = toHex(WORKFLOW_NAME).slice(2).padStart(20, '0').slice(0, 20) // 10 bytes
-	const ownerPacked = toHex(owner as `0x${string}`).slice(2) // 40 hex chars
-	return (`0x${name}${ownerPacked}`) as `0x${string}`
-}
-
-function getWorkflowOwnerAddress(config: Config): string {
-	// The workflow-owner EOA is public config (project.yaml account address);
-	// in the demo it's the platform wallet that launched the campaigns.
-	return config.workflowOwnerAddress
-}
-
-const ESCROW_ONREPORT_ABI = [
-	{
-		name: 'onReport',
-		type: 'function',
-		stateMutability: 'nonpayable',
-		inputs: [
-			{ name: 'metadata', type: 'bytes' },
-			{ name: 'report', type: 'bytes' },
-		],
-		outputs: [],
-	},
-] as const
+// ─── Workflow identity (report metadata) ───────────────────────
+// The CRE Forwarder itself builds the report metadata:
+//   metadata = abi.encodePacked(workflowId(32) || workflowName(10) || workflowOwner(20))
+// using the registry-issued workflow ID and owner — nothing to pin here. The
+// escrow's onReport validates metadata.workflowOwner === terms.workflowOwner
+// (the forwarder-supplied owner is the EOA that deployed this workflow).
 
 // ─── Workflow Init (HTTP trigger) ──────────────────────────────
 // Trigger auth: every incoming HTTP request must carry an ECDSA signature from

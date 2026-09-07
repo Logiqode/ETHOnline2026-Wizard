@@ -68,6 +68,7 @@ contract CampaignWorkflowTest is Test {
         id = factory.createCampaign(
             terms,
             workflowOwner_,
+            address(0), // reportOwner defaults to workflowOwner_
             rewardUri,
             salt,
             COMPANY_A,
@@ -687,6 +688,7 @@ contract CampaignWorkflowTest is Test {
         uint256 id = factory.createCampaign(
             _terms(uint64(block.timestamp), uint64(block.timestamp + 30 days)),
             workflowOwner,
+            address(0), // reportOwner defaults to workflowOwner_
             "https://example.com/metadata/{id}.json",
             keccak256("salt-split"),
             a,
@@ -710,6 +712,7 @@ contract CampaignWorkflowTest is Test {
         factory.createCampaign(
             _terms(uint64(block.timestamp), uint64(block.timestamp + 30 days)),
             workflowOwner,
+            address(0), // reportOwner defaults to workflowOwner_
             "https://example.com/metadata/{id}.json",
             keccak256("salt-fee-split"),
             COMPANY_A,
@@ -827,6 +830,33 @@ function test_OnReportMinSpendStillEnforced() public {
     vm.prank(CRE_FORWARDER);
     vm.expectRevert(); // BelowMinSpend from CampaignRulesLib
     CampaignEscrow(escrowAddr).onReport(_metadata(workflowOwner), _report(nf, customer, 5e18, true, 0.5e18));
+}
+
+function test_SupportsInterfaceForForwarderHandshake() public {
+    // The Keystone forwarder probes ERC-165 before delivering: the receiver
+    // must advertise IReceiver (0x805f2132 — onReport selector; IReceiver
+    // inherits IERC165 so interfaceId excludes inherited fns) and IERC165.
+    assertTrue(CampaignEscrow(escrowAddr).supportsInterface(0x805f2132), "IReceiver advertised");
+    assertTrue(CampaignEscrow(escrowAddr).supportsInterface(0x01ffc9a7), "IERC165 advertised");
+    assertFalse(CampaignEscrow(escrowAddr).supportsInterface(0xffffffff), "unknown interface rejected");
+}
+
+function test_SetReportOwnerHandover() public {
+    // The forwarder stamps the CRE *registry* owner (workflow deployer) into
+    // metadata; reportOwner can be handed over to accept a redeployed workflow.
+    address registryOwner = address(0x8996);
+    // Non-workflowOwner cannot hand over.
+    vm.prank(address(0x999));
+    vm.expectRevert();
+    CampaignEscrow(escrowAddr).setReportOwner(registryOwner);
+    // workflowOwner hands over; onReport then accepts the registry owner's reports.
+    vm.prank(workflowOwner);
+    CampaignEscrow(escrowAddr).setReportOwner(registryOwner);
+    assertEq(CampaignEscrow(escrowAddr).reportOwner(), registryOwner, "handover applied");
+    bytes32 nf = keccak256("report-claim-handover");
+    vm.prank(CRE_FORWARDER);
+    CampaignEscrow(escrowAddr).onReport(_metadata(registryOwner), _report(nf, customer, 50e18, true, 5e18));
+    assertEq(CampaignEscrow(escrowAddr).lifetimeEarned(customer), 5e18, "ledger updated under new reportOwner");
 }
 
 }

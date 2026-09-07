@@ -1,8 +1,9 @@
 LLMs used:
-GLM 5.3 Flash
-muse-spark-1.3-contributor
-DeepSeek V4 Flash 0731
+GLM 5.3 Flash (Codewriting, README)
+DeepSeek V4 Flash 0731 (TechnicalSpec and DemoOutline Consolidation)
 
+Harness:
+Hermes (Desktop)
 
 AI USAGE:
 - Writing and formatting of technical spec, demo outline
@@ -15,8 +16,9 @@ AI USAGE:
 
 PERSONAL CONTRIBUTION:
 - Project decision-making
-- Rule definitions
+- Rule definitions and design
 - Designing test cases
 - Project long term goals and production environment expectations
 - Setting clear scope boundaries (avoiding scope creep)
 - Project, rule, variable namings
+- CRE Workflow Deployment

@@ -20,6 +20,10 @@ contract SeedCampaigns is Script {
         address factoryAddr = vm.envAddress("FACTORY");
         CampaignFactory factory = CampaignFactory(factoryAddr);
         address workflowOwner = msg.sender;
+        // CRE *registry* owner the forwarder stamps into report metadata — the
+        // EOA that deployed the workflow (project.yaml account). Zero disables
+        // the distinction (onReport then accepts workflowOwner's reports).
+        address reportOwner = vm.envOr("REPORT_OWNER", address(0));
 
         uint64 start = uint64(block.timestamp - 1 days);
         uint64 end = uint64(block.timestamp + 365 days);
@@ -42,7 +46,7 @@ contract SeedCampaigns is Script {
             platformFeeBps: 0,
             platformFeeAccount: address(0)
         });
-        uint256 id1 = factory.createCampaign(pct, workflowOwner, "https://wizard.example/api/metadata/{id}.json", keccak256("seed-percent-v2"), address(0xA11CE), address(0xB0B), 2500);
+        uint256 id1 = factory.createCampaign(pct, workflowOwner, reportOwner, "https://wizard.example/api/metadata/{id}.json", keccak256("seed-percent-v2"), address(0xA11CE), address(0xB0B), 2500);
 
         // Campaign 2 — FLAT cashback: $2.00 per qualifying purchase, redeemable.
         CampaignEscrow.CampaignTerms memory flat = CampaignEscrow.CampaignTerms({
@@ -60,7 +64,7 @@ contract SeedCampaigns is Script {
             platformFeeBps: 0,
             platformFeeAccount: address(0)
         });
-        uint256 id2 = factory.createCampaign(flat, workflowOwner, "https://wizard.example/api/metadata/{id}.json", keccak256("seed-flat-v2"), address(0xA11CE), address(0xB0B), 2500);
+        uint256 id2 = factory.createCampaign(flat, workflowOwner, reportOwner, "https://wizard.example/api/metadata/{id}.json", keccak256("seed-flat-v2"), address(0xA11CE), address(0xB0B), 2500);
 
         // Campaign 3 — DISCOUNT: $5.00 saved per purchase, proof-of-savings (NOT redeemable).
         CampaignEscrow.CampaignTerms memory disc = CampaignEscrow.CampaignTerms({
@@ -78,7 +82,7 @@ contract SeedCampaigns is Script {
             platformFeeBps: 0,
             platformFeeAccount: address(0)
         });
-        uint256 id3 = factory.createCampaign(disc, workflowOwner, "https://wizard.example/api/metadata/{id}.json", keccak256("seed-discount-v2"), address(0xA11CE), address(0xB0B), 2500);
+        uint256 id3 = factory.createCampaign(disc, workflowOwner, reportOwner, "https://wizard.example/api/metadata/{id}.json", keccak256("seed-discount-v2"), address(0xA11CE), address(0xB0B), 2500);
 
         vm.stopBroadcast();
 

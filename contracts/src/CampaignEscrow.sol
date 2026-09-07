@@ -100,6 +100,11 @@ contract CampaignEscrow {
     /// @notice The dedicated EOA that CRE `evm.write` submits verdicts from.
     address public workflowOwner;
 
+    /// @notice The CRE *registry* owner the forwarder stamps into report
+    ///         metadata (the EOA that deployed the workflow). Checked by
+    ///         onReport; handover-able via setReportOwner().
+    address public reportOwner;
+
     /// @notice The CRE Forwarder trusted to deliver DON reports (Base Sepolia
     ///         production forwarder). Set at initialize; address(0) disables
     ///         the onReport path entirely (EOA-claim-only deployments).
@@ -127,7 +132,12 @@ contract CampaignEscrow {
     /// @param forwarder_ The CRE Forwarder allowed to deliver DON reports
     ///        (Base Sepolia: 0xF8344CFd5c43616a4366C34E3EEE75af79a74482).
     ///        May be address(0) to disable the onReport path (EOA claims only).
-    function initialize(CampaignTerms calldata terms_, address workflowOwner_, address forwarder_) external {
+    /// @param reportOwner_ The CRE *registry* owner the forwarder stamps into
+    ///        report metadata (the EOA that deployed the workflow). Falls back
+    ///        to workflowOwner_ when zero (single-key deployments).
+    function initialize(CampaignTerms calldata terms_, address workflowOwner_, address forwarder_, address reportOwner_)
+        external
+    {
         if (initialized_) revert CampaignEscrow__AlreadyInitialized();
         initialized_ = true;
         if (workflowOwner_ == address(0)) revert CampaignEscrow__InvalidWorkflowOwner();
@@ -144,6 +154,7 @@ contract CampaignEscrow {
         terms = terms_;
         workflowOwner = workflowOwner_;
         forwarder = forwarder_;
+        reportOwner = reportOwner_ == address(0) ? workflowOwner_ : reportOwner_;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -154,6 +165,31 @@ contract CampaignEscrow {
     function setRedeemer(address wallet, bool allowed) external {
         _onlyOwner();
         authorizedRedeemers[wallet] = allowed;
+    }
+
+    /// @notice Hand over report-identity acceptance to a new CRE registry owner
+    ///         (e.g. after redeploying the workflow under a new owner EOA).
+    ///         Only the current workflowOwner (or the escrow admin) may call.
+    function setReportOwner(address newReportOwner) external {
+        if (msg.sender != workflowOwner && msg.sender != owner) {
+            revert CampaignEscrow__OnlyWorkflowOwner(msg.sender, workflowOwner);
+        }
+        if (newReportOwner == address(0)) revert CampaignEscrow__InvalidWorkflowOwner();
+        reportOwner = newReportOwner;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        ERC-165 (CRE Forwarder handshake)
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice The Keystone CRE Forwarder probes ERC-165 before delivering a
+    ///         report: the receiver must advertise IReceiver and IERC165.
+    ///         IReceiver inherits IERC165, so type(IReceiver).interfaceId is
+    ///         just the onReport(bytes,bytes) selector 0x805f2132 (inherited
+    ///         functions are excluded from interfaceId computation).
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == 0x805f2132 // IReceiver: onReport(bytes,bytes)
+            || interfaceId == 0x01ffc9a7; // IERC165
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -191,10 +227,13 @@ contract CampaignEscrow {
     function onReport(bytes calldata metadata, bytes calldata report) external {
         if (forwarder == address(0) || msg.sender != forwarder) revert CampaignEscrow__InvalidForwarder();
 
-        // Workflow identity check: the report's workflow-owner must be the
-        // workflowOwner this escrow was initialized with.
+        // Workflow identity check: the forwarder stamps the CRE *registry* owner
+        // (the EOA that deployed the workflow) into the metadata — that address
+        // generally differs from `workflowOwner` (the EOA submitter for the
+        // claim() path). `reportOwner` is set at init and may be handed over
+        // by the workflowOwner via setReportOwner().
         address reportWorkflowOwner = _extractWorkflowOwner(metadata);
-        if (reportWorkflowOwner != workflowOwner) revert CampaignEscrow__OnlyWorkflowOwner(reportWorkflowOwner, workflowOwner);
+        if (reportWorkflowOwner != reportOwner) revert CampaignEscrow__OnlyWorkflowOwner(reportWorkflowOwner, reportOwner);
 
         if (report.length != 160) revert CampaignEscrow__InvalidReport(); // 4 x 32 + address padding
         (bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei) =

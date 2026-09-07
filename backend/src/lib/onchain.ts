@@ -12,7 +12,7 @@ import { join } from 'node:path'
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com'
 
 const factoryAbi = parseAbi([
-  'function createCampaign((uint256 rateBps, uint64 start, uint64 end, address reward, uint256 rewardTokenId, (bool minSpendEnabled, uint256 minSpend, bool capEnabled, uint256 cap, bool dayOfWeekEnabled, uint8 daysOfWeek, bool flatEnabled, uint256 flatValue, bool redeemable) rules, uint256 platformFeeBps, address platformFeeAccount) terms, address workflowOwner, string rewardUri, bytes32 salt, address companyA, address companyB, uint256 feeSplitBps) returns (uint256 campaignId)',
+  'function createCampaign((uint256 rateBps, uint64 start, uint64 end, address reward, uint256 rewardTokenId, (bool minSpendEnabled, uint256 minSpend, bool capEnabled, uint256 cap, bool dayOfWeekEnabled, uint8 daysOfWeek, bool flatEnabled, uint256 flatValue, bool redeemable) rules, uint256 platformFeeBps, address platformFeeAccount) terms, address workflowOwner, address reportOwner, string rewardUri, bytes32 salt, address companyA, address companyB, uint256 feeSplitBps) returns (uint256 campaignId)',
   'function campaigns(uint256) view returns (address escrow, address reward, uint256 rewardTokenId, uint64 start, uint64 end)',
   'function nextCampaignId() view returns (uint256)',
   'function MIN_OPERATING_DEPOSIT() view returns (uint256)',
@@ -57,6 +57,8 @@ export interface TermsInput {
 export interface CreateCampaignArgs {
   terms: TermsInput
   workflowOwner: Address
+  /** CRE *registry* owner the forwarder stamps into report metadata (workflow deployer EOA); zero = use workflowOwner. */
+  reportOwner?: Address
   rewardUri: string
   salt: Hex
   companyA: Address
@@ -119,7 +121,7 @@ export async function createCampaignOnChain(args: CreateCampaignArgs): Promise<C
     address: deployment.factory,
     abi: factoryAbi,
     functionName: 'createCampaign',
-    args: [terms, args.workflowOwner, args.rewardUri, args.salt, args.companyA, args.companyB, BigInt(args.feeSplitBps)],
+    args: [terms, args.workflowOwner, args.reportOwner ?? '0x0000000000000000000000000000000000000000', args.rewardUri, args.salt, args.companyA, args.companyB, BigInt(args.feeSplitBps)],
   })
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash })

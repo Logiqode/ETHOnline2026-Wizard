@@ -85,6 +85,8 @@ contract CampaignFactory {
     /// @notice Deploy a new campaign: escrow clone + paired reward contract.
     /// @param terms_ Campaign terms (rateBps + rules, start, end).
     /// @param workflowOwner_ CRE workflow-owner EOA that will submit claims.
+    /// @param reportOwner_ CRE *registry* owner the forwarder stamps into report
+    ///        metadata (the EOA that deployed the workflow); zero = use workflowOwner_.
     /// @param rewardUri_ ERC-1155 metadata URI template (e.g. ".../{id}.json").
     /// @param salt_ CREATE2 salt for deterministic escrow address (e.g. hash of campaignId).
     /// @param companyA_ Company A (POS) fee recipient.
@@ -95,6 +97,7 @@ contract CampaignFactory {
     function createCampaign(
         CampaignEscrow.CampaignTerms calldata terms_,
         address workflowOwner_,
+        address reportOwner_,
         string calldata rewardUri_,
         bytes32 salt_,
         address companyA_,
@@ -117,9 +120,7 @@ contract CampaignFactory {
         CampaignEscrow.CampaignTerms memory termsWithReward = terms_;
         termsWithReward.reward = address(reward);
         termsWithReward.rewardTokenId = tokenId;
-        // Base Sepolia CRE production forwarder — the only caller allowed to
-        // deliver DON reports to the escrow's onReport path.
-        CampaignEscrow(escrow).initialize(termsWithReward, workflowOwner_, 0xF8344CFd5c43616a4366C34E3EEE75af79a74482);
+        _initEscrow(escrow, termsWithReward, workflowOwner_, reportOwner_);
 
         campaigns[campaignId] = CampaignInfo({
             escrow: escrow,
@@ -140,6 +141,18 @@ contract CampaignFactory {
     /// @notice Predict the escrow address a campaign would get for a given salt.
     function predictEscrowAddress(bytes32 salt_) external view returns (address) {
         return Clones.predictDeterministicAddress(escrowImplementation, salt_);
+    }
+
+    /// @dev Base Sepolia CRE production forwarder — the only caller allowed to
+    ///      deliver DON reports to the escrow's onReport path. Helper keeps the
+    ///      createCampaign stack shallow (the reportOwner param tipped it over).
+    function _initEscrow(
+        address escrow,
+        CampaignEscrow.CampaignTerms memory terms_,
+        address workflowOwner_,
+        address reportOwner_
+    ) internal {
+        CampaignEscrow(escrow).initialize(terms_, workflowOwner_, 0xF8344CFd5c43616a4366C34E3EEE75af79a74482, reportOwner_);
     }
 
     /*//////////////////////////////////////////////////////////////
