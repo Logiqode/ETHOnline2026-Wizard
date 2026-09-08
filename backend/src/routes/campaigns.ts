@@ -4,10 +4,13 @@ import { sql } from '../db'
 import {
   MIN_OPERATING_WEI,
   campaignSchema,
+  computeDepositDeadline,
+  depositShareWei,
   generateSalt,
   toApi,
   validateLaunch,
   type CampaignRow,
+  type DepositRecord,
 } from '../lib/launch'
 import { createCampaignOnChain, loadDeployment, readRootEnvVar, usdToWei } from '../lib/onchain'
 import { loadEscrowState } from '../lib/escrowState'
@@ -202,6 +205,33 @@ campaigns.post('/:id/launch', async (c) => {
   const salt = generateSalt()
 
   // ── On-chain createCampaign: real deployment to Base Sepolia ──────────────
+  const result = await launchOnChainAndRecord(id, row, salt, deployment)
+  if ('error' in result) return c.json({ error: result.error }, result.status)
+  return c.json({ ...toApi(result.row), onchainTxHash: result.onchain.txHash, onchainCampaignId: result.onchain.campaignId })
+})
+
+// ─── Shared launch core: terms mapping → createCampaignOnChain → DB row ─────
+// Used by BOTH launch paths: the wizard's direct /launch (DEMO bypass of the
+// deposit handshake) and the two-deposit completion in the handshake flow.
+// Returns a discriminated result so route handlers can shape their responses.
+async function launchOnChainAndRecord(
+  id: number,
+  row: CampaignRow,
+  salt: string,
+  deployment: Awaited<ReturnType<typeof loadDeployment>>,
+): Promise<{ error: string; status: 400 | 502 } | { row: CampaignRow; onchain: Awaited<ReturnType<typeof createCampaignOnChain>> }> {
+  // ── Reward-type gate (PRODUCTION-LIMITED honesty) ─────────────────────────
+  // Only 'monetary' (cashback/discount) has a launch mapping. 'digital' badge
+  // campaigns WOULD be supported by the on-chain caps (flat mechanic, value 1,
+  // per-tx 1) but the launcher wiring doesn't exist yet — a launch today would
+  // silently encode rateBps=0/flat=0 and mint nothing. Refuse loudly instead.
+  const launchRewardType = String(row.mechanics?.rewardType ?? (row as { reward_type?: string }).reward_type ?? '')
+  if (launchRewardType !== 'monetary') {
+    return { error: `PRODUCTION-LIMITED: reward type "${launchRewardType}" has no launch mapping yet — only Monetary (cashback/discount) campaigns can launch on-chain.`, status: 400 }
+  }
+
+  // Campaign-wide cap (wizard "Total redeem cap" toggle): earn-side, lifetime,
+  // ALL users combined — enforced on-chain via the escrow's campaignTotalEarned.
   // Terms from the wizard's JSONB record; rewardUri points at the (future)
   // metadata endpoint — the reward contract's ERC-1155 base URI template.
   const mechanics = row.mechanics as { rewardType?: string; rewardValues?: Record<string, string | number | boolean> }
@@ -210,9 +240,6 @@ campaigns.post('/:id/launch', async (c) => {
   const rs = rules?.ruleStates ?? {}
   const rvals = rules?.ruleValues ?? {}
   const t = row.terms as { start?: string; end?: string; noEndDate?: boolean; totalRedeemCap?: number; redeemCapEnabled?: boolean }
-
-  // Campaign-wide cap (wizard "Total redeem cap" toggle): earn-side, lifetime,
-  // ALL users combined — enforced on-chain via the escrow's campaignTotalEarned.
   const redeemCapOn = t?.redeemCapEnabled === true || t?.redeemCapEnabled === undefined // default ON (wizard default)
   const totalRedeemCap = Number(t?.totalRedeemCap ?? 0)
 
@@ -311,7 +338,7 @@ campaigns.post('/:id/launch', async (c) => {
       feeSplitBps: row.fee_split_bps,
     })
   } catch (err) {
-    return c.json({ error: `On-chain launch failed: ${(err as Error).message}` }, 502)
+    return { error: `On-chain launch failed: ${(err as Error).message}`, status: 502 as const }
   }
 
   const rows = await sql<CampaignRow[]>`
@@ -322,8 +349,193 @@ campaigns.post('/:id/launch', async (c) => {
     WHERE id = ${id}
     RETURNING *
   `
-  return c.json({ ...toApi(rows[0]), onchainTxHash: onchain.txHash, onchainCampaignId: onchain.campaignId })
+  return { row: rows[0], onchain }
+}
+
+// ─── Deposit handshake (gen-6): initiate / record / expiry ───────────────────
+// DEMO SCOPE, honestly stated: there is NO authentication in the backend — any
+// caller can initiate or record a deposit for any campaign, and the "Privy
+// wallet" is whatever address the client claims. Production would bind wallets
+// to authenticated company identities (Privy access tokens verified server-
+// side) and email invites with single-use codes. The deposit tx itself IS
+// verified on-chain (the recorded tx must have moved exactly the share from
+// the claimed wallet to the platform wallet), so the money path is real even
+// though identity attribution is not.
+
+const PLATFORM_WALLET = '0x9587BD3e8195D597BF4e82B18724178e52B55c4F' as Address // demo platform gas wallet
+
+/** Cancel a pending_deposit campaign whose deadline has passed (lazy expiry). */
+async function expireIfPastDeadline(row: CampaignRow): Promise<CampaignRow> {
+  if (
+    row.status === 'pending_deposit' &&
+    row.deposit_deadline &&
+    new Date(row.deposit_deadline).getTime() <= Date.now()
+  ) {
+    const cancelled = await sql<CampaignRow[]>`
+      UPDATE campaigns SET status = 'cancelled'
+      WHERE id = ${row.id} AND status = 'pending_deposit'
+      RETURNING *
+    `
+    if (cancelled.length > 0) return cancelled[0]
+  }
+  return row
+}
+
+// POST /api/campaigns/:id/deposits/initiate — draft → pending_deposit.
+// Computes each share from fee_split_bps, sets the deadline (campaign start,
+// or now+4h when the start is past/missing), and snapshots the company
+// wallets the depositing clients must match.
+campaigns.post('/:id/deposits/initiate', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'Invalid id' }, 400)
+  const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
+  if (rows.length === 0) return c.json({ error: 'Not found' }, 404)
+  const row = await expireIfPastDeadline(rows[0])
+  if (row.status !== 'draft') {
+    return c.json({ error: `Campaign is ${row.status}, not draft — initiate only works on drafts` }, 409)
+  }
+  // Handshake flow: the REAL fee recipients are the depositing wallets, which
+  // don't exist yet at initiate time — so zero placeholders pass here. The
+  // launch validator still enforces non-zero at createCampaign time (the
+  // deposited wallets are written into company_a/company_b as they land).
+  const validation = validateLaunch({
+    feeSplitBps: row.fee_split_bps,
+    companyA: row.company_a,
+    companyB: row.company_b,
+    operatingDepositWei: BigInt(row.operating_deposit),
+  })
+  if (!validation.ok && !validation.error.startsWith('InvalidFeeAccount')) {
+    return c.json({ error: validation.error }, 400)
+  }
+
+  const t = row.terms as { start?: string; noEndDate?: boolean }
+  const deadline = computeDepositDeadline(t?.start)
+  const updated = await sql<CampaignRow[]>`
+    UPDATE campaigns SET status = 'pending_deposit', deposit_deadline = ${deadline}, deposits = '{}'::jsonb
+    WHERE id = ${id} RETURNING *
+  `
+  return c.json({
+    ...toApi(updated[0]),
+    shares: {
+      A: depositShareWei(row.fee_split_bps, 'A').toString(),
+      B: depositShareWei(row.fee_split_bps, 'B').toString(),
+    },
+    platformWallet: PLATFORM_WALLET,
+  })
 })
+
+// POST /api/campaigns/:id/deposits — record one company's deposit.
+// Body: { company: 'A'|'B', wallet, txHash }. The backend verifies ON-CHAIN
+// that txHash transferred exactly the company's share from `wallet` to the
+// platform wallet before recording it. When both deposits are recorded, the
+// on-chain createCampaign fires immediately (same path as the bypass launch).
+const depositBody = z.object({
+  company: z.enum(['A', 'B']),
+  wallet: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+})
+
+campaigns.post('/:id/deposits', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'Invalid id' }, 400)
+  let body: unknown
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400)
+  }
+  const parsed = depositBody.safeParse(body)
+  if (!parsed.success) return c.json({ error: 'Validation failed', issues: parsed.error.flatten() }, 400)
+  const { company, wallet, txHash } = parsed.data
+
+  const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
+  if (rows.length === 0) return c.json({ error: 'Not found' }, 404)
+  const row = await expireIfPastDeadline(rows[0])
+  if (row.status !== 'pending_deposit') {
+    return c.json({ error: `Campaign is ${row.status} — deposits only accepted while pending_deposit` }, 409)
+  }
+
+  const deposits = (row.deposits ?? {}) as Record<string, DepositRecord>
+  if (deposits[company]) {
+    return c.json({ error: `Company ${company} already deposited` }, 409)
+  }
+  const other = company === 'A' ? 'B' : 'A'
+  const depositedWallet = deposits[other]?.wallet.toLowerCase()
+  if (depositedWallet && depositedWallet === wallet.toLowerCase()) {
+    return c.json({ error: 'The same wallet cannot deposit for both companies' }, 400)
+  }
+
+  // ── On-chain verification: the tx must be a real transfer of the exact ──
+  // share from the claimed wallet to the platform wallet.
+  const shareWei = depositShareWei(row.fee_split_bps, company)
+  const { createPublicClient, http, parseAbi } = await import('viem')
+  const { baseSepolia } = await import('viem/chains')
+  const client = createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com') })
+  const receipt = await client.getTransactionReceipt({ hash: txHash as Hex }).catch(() => null)
+  if (!receipt || receipt.status !== 'success') {
+    return c.json({ error: 'Deposit tx not found or failed on-chain' }, 400)
+  }
+  const expectedTo = PLATFORM_WALLET.toLowerCase()
+  const expectedFrom = wallet.toLowerCase()
+  const value = BigInt(shareWei)
+  // Plain ETH transfer check: the tx itself must be from the claimed wallet,
+  // to the platform wallet, carrying exactly the share. (An ERC-20 deposit
+  // path would use Transfer logs; the demo deposits native ETH.)
+  const tx = await client.getTransaction({ hash: txHash as Hex }).catch(() => null)
+  const ethOk = !!tx && tx.from.toLowerCase() === expectedFrom && (tx.to?.toLowerCase() ?? '') === expectedTo && tx.value === value
+  const ok = ethOk
+  if (!ok) {
+    return c.json({ error: `Deposit tx does not carry ${Number(shareWei) / 1e18} ETH from ${wallet} to the platform wallet` }, 400)
+  }
+
+  const updatedDeposits = { ...deposits, [company]: { wallet, txHash, wei: shareWei.toString(), confirmedAt: new Date().toISOString() } }
+  const bothIn = Object.keys(updatedDeposits).length === 2
+
+  if (!bothIn) {
+    const updated = await sql<CampaignRow[]>`
+      UPDATE campaigns SET deposits = ${sql.json(updatedDeposits as never)}::jsonb
+      WHERE id = ${id} RETURNING *
+    `
+    return c.json({ ...toApi(updated[0]), awaiting: other })
+  }
+
+  // Both deposits in → fire the on-chain launch (same createCampaign path as
+  // the bypass), with the DEPOSITED WALLETS as the fee recipients — the
+  // handshake's whole point: the wallets that funded the campaign are the
+  // companies' on-chain fee accounts.
+  const updatedRow: CampaignRow = {
+    ...row,
+    company_a: updatedDeposits.A.wallet,
+    company_b: updatedDeposits.B.wallet,
+  }
+  let deployment: Awaited<ReturnType<typeof loadDeployment>>
+  try {
+    deployment = await loadDeployment()
+  } catch (err) {
+    return c.json({ error: `Deployment config unavailable: ${(err as Error).message}` }, 503)
+  }
+  const salt = generateSalt()
+  const launchedRow = await launchOnChainAndRecord(id, updatedRow, salt, deployment)
+  if ('error' in launchedRow) return c.json({ error: launchedRow.error }, launchedRow.status)
+  return c.json({ ...toApi(launchedRow.row), onchainTxHash: launchedRow.onchain.txHash, onchainCampaignId: launchedRow.onchain.campaignId, deposits: updatedDeposits })
+})
+
+// POST /api/campaigns/:id/deposits/cancel — creator cancels a pending campaign
+// (DEMO: also the cleanup path if a deposit was recorded with a wrong tx).
+campaigns.post('/:id/deposits/cancel', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'Invalid id' }, 400)
+  const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
+  if (rows.length === 0) return c.json({ error: 'Not found' }, 404)
+  if (rows[0].status !== 'pending_deposit') {
+    return c.json({ error: `Campaign is ${rows[0].status} — only pending_deposit can be cancelled` }, 409)
+  }
+  const updated = await sql<CampaignRow[]>`
+    UPDATE campaigns SET status = 'cancelled' WHERE id = ${id} RETURNING *
+  `
+  return c.json(toApi(updated[0]))
+})
+
 // ─── POST /api/campaigns/seed ────────────────────────────────────────────────
 // Idempotent bootstrap: insert DB records for the three factory-seeded demo
 // campaigns (they were deployed by SeedCampaigns.s.sol, not the wizard, so the

@@ -100,7 +100,7 @@ export function generateSalt(): string {
 export interface CampaignRow {
   id: number
   name: string
-  status: 'draft' | 'launched'
+  status: 'draft' | 'pending_deposit' | 'launched' | 'cancelled'
   reward_type: 'monetary' | 'digital' | 'physical'
   mechanics: Record<string, unknown>
   terms: Record<string, unknown>
@@ -116,20 +116,59 @@ export interface CampaignRow {
   reward_address: string | null
   created_at: Date
   launched_at: Date | null
+  deposit_deadline: Date | null
+  deposits: Record<string, DepositRecord>
 }
 
-export interface CampaignApi extends Omit<CampaignRow, 'operating_deposit' | 'created_at' | 'launched_at'> {
+// One recorded deposit: the Privy wallet that sent it, the tx that carried it,
+// and when the backend confirmed it on-chain. The JSONB key is 'A' or 'B'.
+export interface DepositRecord {
+  wallet: string
+  txHash: string
+  wei: string
+  confirmedAt: string
+}
+
+export interface CampaignApi extends Omit<CampaignRow, 'operating_deposit' | 'created_at' | 'launched_at' | 'deposit_deadline' | 'deposits'> {
   operatingDepositWei: string
   createdAt: string
   launchedAt: string | null
+  depositDeadline: string | null
+  deposits: Record<string, DepositRecord>
 }
 
 export function toApi(row: CampaignRow): CampaignApi {
-  const { operating_deposit, created_at, launched_at, ...rest } = row
+  const { operating_deposit, created_at, launched_at, deposit_deadline, deposits, ...rest } = row
   return {
     ...rest,
     operatingDepositWei: operating_deposit.toString(),
     createdAt: created_at.toISOString(),
     launchedAt: launched_at ? launched_at.toISOString() : null,
+    depositDeadline: deposit_deadline ? deposit_deadline.toISOString() : null,
+    deposits: deposits ?? {},
   }
+}
+
+// ─── Deposit shares & deadline (pure helpers — unit-tested) ─────────────────
+// Each company deposits its own share of MIN_OPERATING_DEPOSIT: A deposits
+// feeSplitBps% of the total, B the complement (mirrors the factory's
+// _recordDeposit split — A 4000 bps of 0.01 ETH → A sends 0.004, B 0.006).
+export function depositShareWei(feeSplitBps: number, company: 'A' | 'B', totalWei?: bigint): bigint {
+  const total = totalWei ?? MIN_OPERATING_WEI
+  const shareBps = company === 'A' ? feeSplitBps : MAX_FEE_SPLIT_BPS - feeSplitBps
+  return (total * BigInt(shareBps)) / BigInt(MAX_FEE_SPLIT_BPS)
+}
+
+// Deposit deadline = the campaign's start date; if the start is already in the
+// past (or missing), the deadline is now + 4 hours. Backend-enforced only —
+// on-chain nothing blocks a late recording (honest demo boundary, README'd).
+export const DEPOSIT_DEADLINE_GRACE_MS = 4 * 60 * 60 * 1000
+
+export function computeDepositDeadline(startIso: unknown, nowMs?: number): string {
+  const now = nowMs ?? Date.now()
+  const startMs = typeof startIso === 'string' ? new Date(startIso).getTime() : NaN
+  if (Number.isFinite(startMs) && startMs > now) {
+    return new Date(startMs).toISOString()
+  }
+  return new Date(now + DEPOSIT_DEADLINE_GRACE_MS).toISOString()
 }

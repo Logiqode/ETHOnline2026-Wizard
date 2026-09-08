@@ -1,7 +1,11 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { sql } from './db'
+import { ensureDepositSchema, sql } from './db'
 import { campaigns } from './routes/campaigns'
+
+// Bring the DB up to the gen-6 shape (deposit-handshake statuses + columns)
+// before serving — idempotent, safe on a fresh or already-migrated database.
+await ensureDepositSchema()
 
 const app = new Hono()
 

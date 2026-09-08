@@ -1,7 +1,7 @@
 {
   "chainId": 84532,
-  "deployedAt": 1788805726,
+  "deployedAt": 1788857484,
   "deployer": "0x9587BD3e8195D597BF4e82B18724178e52B55c4F",
-  "escrowImplementation": "0x5b4136949014075f279b9b5b1cE178b325643fEA",
-  "factory": "0x29761A6ef856fc1Af6b8EABD91708aDA8D656D31"
+  "escrowImplementation": "0xF6EF5Ca162326d5904D86f1EdB8ef934412e8e28",
+  "factory": "0x407fC79FC69BbBa4c8b13FD29E9D347A6b5002aD"
 }

@@ -268,11 +268,11 @@ export default function CampaignWizard() {
   const prodLimited = Object.values(ruleStates).filter((s) => s === 'production-limited').length
   const enabledRewardBlocks = Object.values(rewardBlockStates).filter((s) => s === 'enabled').length
 
-  // ── Launch: POST draft → POST launch. Creates the campaign in the local DB,
-  // ── then validates launch (fee split, fee accounts, deposit) and marks it
-  // ── launched with a generated CREATE2 salt. On-chain createCampaign wiring
-  // ── is still pending, so addresses stay null — the salt is the launch artifact.
-  const launchCampaign = async () => {
+  // ── Launch paths (gen-6): the primary path saves the draft then flips it to
+  // ── PENDING_DEPOSIT — the deposit handshake (Privy wallets + shares) on the
+  // ── detail page takes over. "Bypass deposit (DEMO ONLY)" keeps today's
+  // ── direct-launch behavior (manual fee addresses, no transfers).
+  const launchCampaign = async (bypass: boolean) => {
     setSaving(true)
     setSaveError(null)
     try {
@@ -298,14 +298,24 @@ export default function CampaignWizard() {
         throw new Error(err.error || `HTTP ${saveRes.status}`)
       }
       const saved = await saveRes.json()
-      const launchRes = await fetch(`http://localhost:4000/api/campaigns/${saved.id}/launch`, { method: 'POST' })
-      if (!launchRes.ok) {
-        const err = await launchRes.json().catch(() => ({ error: `HTTP ${launchRes.status}` }))
-        throw new Error(err.error || `HTTP ${launchRes.status}`)
+      if (bypass) {
+        const launchRes = await fetch(`http://localhost:4000/api/campaigns/${saved.id}/launch`, { method: 'POST' })
+        if (!launchRes.ok) {
+          const err = await launchRes.json().catch(() => ({ error: `HTTP ${launchRes.status}` }))
+          throw new Error(err.error || `HTTP ${launchRes.status}`)
+        }
+        const launchedCampaign = await launchRes.json()
+        setLaunchResult({ id: String(launchedCampaign.id), salt: launchedCampaign.salt })
+        setLaunched(true)
+      } else {
+        const initRes = await fetch(`http://localhost:4000/api/campaigns/${saved.id}/deposits/initiate`, { method: 'POST' })
+        if (!initRes.ok) {
+          const err = await initRes.json().catch(() => ({ error: `HTTP ${initRes.status}` }))
+          throw new Error(err.error || `HTTP ${initRes.status}`)
+        }
+        setLaunchResult({ id: String(saved.id), salt: '' })
+        setLaunched(true)
       }
-      const launchedCampaign = await launchRes.json()
-      setLaunchResult({ id: String(launchedCampaign.id), salt: launchedCampaign.salt })
-      setLaunched(true)
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Launch failed')
     } finally {
@@ -745,26 +755,44 @@ export default function CampaignWizard() {
           <div className="launch-info">
             {rewardType !== 'monetary' ? (
               <strong>PRODUCTION-LIMITED — {rewardTypeMeta.label} campaigns cannot launch on-chain yet (no launcher wiring). Switch to Monetary to launch.</strong>
-            ) : launched ? <strong>Launched — pending on-chain wiring</strong> : <><strong>Launch Campaign</strong> · saves a draft, then validates + launches</>}
+            ) : launched && launchResult?.salt ? <strong>Launched (deposit bypass) — live on-chain</strong>
+              : launched ? <strong>Pending deposits — finish the handshake on the campaign page</strong>
+                : <><strong>Launch Campaign</strong> · saves a draft, then both companies deposit their share via Privy wallets — the escrow deploys when both deposits confirm</>}
           </div>
-          <button
-            className="btn btn-primary"
-            onClick={launchCampaign}
-            disabled={launched || saving || rewardType !== 'monetary'}
-            title={rewardType !== 'monetary' ? 'PRODUCTION-LIMITED: this reward type has no launch mapping yet — only Monetary campaigns can launch on-chain.' : undefined}
-            style={rewardType !== 'monetary' ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
-          >
-            {rewardType !== 'monetary' ? 'Launch unavailable' : saving ? 'Launching…' : launched ? 'Launched ✓' : 'Launch Campaign'}
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => void launchCampaign(false)}
+              disabled={launched || saving || rewardType !== 'monetary'}
+              title={rewardType !== 'monetary' ? 'PRODUCTION-LIMITED: this reward type has no launch mapping yet — only Monetary campaigns can launch on-chain.' : undefined}
+              style={rewardType !== 'monetary' ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
+            >
+              {rewardType !== 'monetary' ? 'Launch unavailable' : saving ? 'Saving…' : launched ? 'Saved ✓' : 'Launch Campaign'}
+            </button>
+            <button
+              className="btn"
+              onClick={() => void launchCampaign(true)}
+              disabled={launched || saving || rewardType !== 'monetary'}
+              title="DEMO ONLY: skips the deposit handshake — launches immediately with the manual fee addresses, no deposits."
+            >
+              {saving ? '…' : 'Bypass deposit (DEMO ONLY)'}
+            </button>
+          </div>
         </div>
         {saveError && <div className="launch-error" role="alert">⚠️ {saveError}</div>}
-        {launched && launchResult && (
+        {launched && launchResult && (launchResult.salt ? (
           <div className="launch-pending" role="status">
-            <strong>Campaign #{launchResult.id} launched</strong> — on-chain <span className="mono">createCampaign()</span> wiring
-            still pending (addresses stay null until deployment lands). CREATE2 salt:
+            <strong>Campaign #{launchResult.id} launched (deposit bypass)</strong> — deployed via{' '}
+            <span className="mono">createCampaign()</span>. CREATE2 salt:
             <code className="salt">{launchResult.salt}</code>
           </div>
-        )}
+        ) : (
+          <div className="launch-pending" role="status">
+            <strong>Campaign #{launchResult.id} pending deposits</strong> — open the campaign page: each company
+            connects a Privy wallet and deposits its operating share; the escrow deploys when both confirm. If the
+            deadline passes first, the campaign cancels.
+          </div>
+        ))}
       </div>
     </div>
   )

@@ -23420,9 +23420,10 @@ var requestSchema = exports_external.object({
   amountSpent: exports_external.number().nonnegative(),
   timestamp: exports_external.number().int().nonnegative(),
   earnedInWindow: exports_external.number().nonnegative().default(0),
+  earnedInWindowStart: exports_external.number().int().nonnegative().optional(),
   items: exports_external.array(exports_external.string()).optional()
 });
-function evaluate(request, campaign) {
+function evaluate(request, campaign, campaignTotalEarned = 0) {
   if (request.timestamp < campaign.start) {
     return { eligible: false, points: 0, reason: "before-campaign-start" };
   }
@@ -23443,7 +23444,18 @@ function evaluate(request, campaign) {
   if (campaign.perTxCapEnabled && points > campaign.perTxCap)
     points = campaign.perTxCap;
   if (campaign.capEnabled) {
-    const remaining = campaign.cap - (request.earnedInWindow ?? 0);
+    let earnedInWindow = request.earnedInWindow ?? 0;
+    if (campaign.capWindow > 0) {
+      const wStart = windowStart(campaign.capWindow, campaign.capWindowCount, campaign.capWindowTime, campaign.capWindowDow, request.timestamp);
+      if (request.earnedInWindowStart !== undefined && request.earnedInWindowStart !== wStart) {
+        earnedInWindow = 0;
+      }
+    }
+    const remaining = campaign.cap - earnedInWindow;
+    points = Math.min(points, Math.max(remaining, 0));
+  }
+  if (campaign.campaignCapEnabled) {
+    const remaining = campaign.campaignCap - campaignTotalEarned;
     points = Math.min(points, Math.max(remaining, 0));
   }
   if (points <= 0) {
@@ -23496,7 +23508,13 @@ var ESCROW_TERMS_ABI = [
           { name: "flatValue", type: "uint256" },
           { name: "redeemable", type: "bool" },
           { name: "perTxCapEnabled", type: "bool" },
-          { name: "perTxCap", type: "uint256" }
+          { name: "perTxCap", type: "uint256" },
+          { name: "capWindow", type: "uint8" },
+          { name: "capWindowCount", type: "uint8" },
+          { name: "capWindowTime", type: "uint16" },
+          { name: "capWindowDow", type: "uint8" },
+          { name: "campaignCapEnabled", type: "bool" },
+          { name: "campaignCap", type: "uint256" }
         ]
       },
       { name: "platformFeeBps", type: "uint256" },
@@ -23504,6 +23522,36 @@ var ESCROW_TERMS_ABI = [
     ]
   }
 ];
+function windowStart(capWindow, capWindowCount, timeOfDay, anchorDow, ts) {
+  const n = capWindowCount > 0 ? capWindowCount : 1;
+  const off = timeOfDay >= 86400 ? 0 : timeOfDay;
+  if (capWindow === 1) {
+    if (ts < off)
+      return 0;
+    return Math.floor((ts - off) / 86400 / n) * n * 86400 + off;
+  }
+  if (capWindow === 2) {
+    const base = 4 * 86400 + anchorDow % 7 * 86400 + off;
+    if (ts < base)
+      return 0;
+    return Math.floor((ts - base) / (7 * 86400) / n) * n * 7 * 86400 + base;
+  }
+  if (capWindow === 3 || capWindow === 4) {
+    if (ts < off)
+      return 0;
+    const d = new Date((ts - off) * 1000);
+    let months = d.getUTCFullYear() * 12 + d.getUTCMonth();
+    months = Math.floor(months / n) * n;
+    if (capWindow === 3) {
+      const y2 = Math.floor(months / 12);
+      const m = months % 12;
+      return Date.UTC(y2, m, 1) / 1000 + off;
+    }
+    const y = Math.floor(months / 12);
+    return Date.UTC(y, 0, 1) / 1000 + off;
+  }
+  return 0;
+}
 function getEvmClient(chainName) {
   const net = getNetwork({ chainFamily: "evm", chainSelectorName: chainName, isTestnet: true });
   if (!net)
@@ -23549,7 +23597,13 @@ function readCampaignOnChain(runtime2, evmClient, campaignId) {
     flatValue: rawRules[7],
     redeemable: rawRules[8],
     perTxCapEnabled: rawRules[9],
-    perTxCap: rawRules[10]
+    perTxCap: rawRules[10],
+    capWindow: rawRules[11],
+    capWindowCount: rawRules[12],
+    capWindowTime: rawRules[13],
+    capWindowDow: rawRules[14],
+    campaignCapEnabled: rawRules[15],
+    campaignCap: rawRules[16]
   } : rawRules;
   const { minSpendEnabled: minSpendOn, minSpend: minSpendWei, capEnabled: capOn, cap: capWei, dayOfWeekEnabled: dowOn, daysOfWeek: dowMask } = rules;
   const usd = (wei) => Number(wei) / 1000000000000000000;
@@ -23568,8 +23622,31 @@ function readCampaignOnChain(runtime2, evmClient, campaignId) {
     dayOfWeekEnabled: dowOn,
     daysOfWeek: dowMask,
     perTxCapEnabled: rules.perTxCapEnabled,
-    perTxCap: rules.perTxCapEnabled ? usd(rules.perTxCap) : 0
+    perTxCap: rules.perTxCapEnabled ? usd(rules.perTxCap) : 0,
+    capWindow: rules.capWindow,
+    capWindowCount: rules.capWindowCount,
+    capWindowTime: rules.capWindowTime,
+    capWindowDow: rules.capWindowDow,
+    campaignCapEnabled: rules.campaignCapEnabled,
+    campaignCap: rules.campaignCapEnabled ? usd(rules.campaignCap) : 0
   };
+}
+var ESCROW_TOTAL_EARNED_ABI = [
+  {
+    name: "campaignTotalEarned",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  }
+];
+function readCampaignTotalEarned(runtime2, evmClient, escrow) {
+  const callData = encodeFunctionData({ abi: ESCROW_TOTAL_EARNED_ABI, functionName: "campaignTotalEarned", args: [] });
+  const reply = evmClient.callContract(runtime2, {
+    call: encodeCallMsg({ from: "0x0000000000000000000000000000000000000000", to: escrow, data: callData })
+  }).result();
+  const earned = decodeCall(ESCROW_TOTAL_EARNED_ABI, "campaignTotalEarned", reply.data);
+  return Number(earned) / 1000000000000000000;
 }
 function deriveNullifier(master, campaignId, userAnchor, timestamp) {
   const campaignSecret = hmac2(sha2562, toBytes(master), toBytes(String(campaignId)));
@@ -23587,8 +23664,13 @@ var onHTTPTrigger = (runtime2, payload) => {
   runtime2.log(`payload: campaign=${request.campaignId} user=${userAnchor} merchant=${request.merchantId}` + ` amount=${request.amountSpent} ts=${request.timestamp} earnedInWindow=${request.earnedInWindow}`);
   const evmClient = getEvmClient(config.chainName);
   const campaign = readCampaignOnChain(donRuntimeOf(runtime2), evmClient, request.campaignId);
-  runtime2.log(`on-chain terms: escrow=${campaign.escrow} rateBps=${campaign.rateBps} window=[${campaign.start},${campaign.end}] minSpend=${campaign.minSpend} cap=${campaign.cap}`);
-  const verdict = evaluate(request, campaign);
+  runtime2.log(`on-chain terms: escrow=${campaign.escrow} rateBps=${campaign.rateBps} window=[${campaign.start},${campaign.end}] minSpend=${campaign.minSpend} cap=${campaign.cap} campaignCap=${campaign.campaignCapEnabled ? campaign.campaignCap : "none"}`);
+  let campaignTotalEarned = 0;
+  if (campaign.campaignCapEnabled) {
+    campaignTotalEarned = readCampaignTotalEarned(donRuntimeOf(runtime2), evmClient, campaign.escrow);
+    runtime2.log(`campaignTotalEarned=${campaignTotalEarned} of ${campaign.campaignCap}`);
+  }
+  const verdict = evaluate(request, campaign, campaignTotalEarned);
   runtime2.log(`eligibility: ${verdict.reason} eligible=${verdict.eligible} points=${verdict.points}`);
   const nullifier = deriveNullifier(master, request.campaignId, request.userAnchor, request.timestamp);
   if (!verdict.eligible) {

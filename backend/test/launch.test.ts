@@ -4,6 +4,8 @@ import {
   MIN_OPERATING_DEPOSIT,
   MIN_OPERATING_WEI,
   calculateRewardEarn,
+  computeDepositDeadline,
+  depositShareWei,
   generateSalt,
   validateLaunch,
 } from '../src/lib/launch'
@@ -102,5 +104,51 @@ describe('calculateRewardEarn (per-tx cap × per-user cap interplay)', () => {
 
   test('zero earn when rate is zero', () => {
     expect(calculateRewardEarn({ purchaseAmount: 100, rateBps: 0, perTxCap: 20, perUserCap: 100 })).toBe(0)
+  })
+})
+
+describe('depositShareWei (mirrors the factory _recordDeposit split)', () => {
+  test('40:60 split of 0.01 ETH → A 0.004, B 0.006', () => {
+    expect(depositShareWei(4000, 'A')).toBe(4_000_000_000_000_000n)
+    expect(depositShareWei(4000, 'B')).toBe(6_000_000_000_000_000n)
+  })
+
+  test('shares always sum to the total (integer division remainder goes to B)', () => {
+    for (const bps of [0, 1, 3333, 5000, 9999, 10_000]) {
+      expect(depositShareWei(bps, 'A') + depositShareWei(bps, 'B')).toBe(MIN_OPERATING_WEI)
+    }
+  })
+
+  test('extreme splits: 0 bps → A deposits nothing, B everything; 10000 bps reversed', () => {
+    expect(depositShareWei(0, 'A')).toBe(0n)
+    expect(depositShareWei(0, 'B')).toBe(MIN_OPERATING_WEI)
+    expect(depositShareWei(10_000, 'A')).toBe(MIN_OPERATING_WEI)
+    expect(depositShareWei(10_000, 'B')).toBe(0n)
+  })
+
+  test('custom total is honored', () => {
+    expect(depositShareWei(5000, 'A', 2_000_000_000_000_000_000n)).toBe(1_000_000_000_000_000_000n)
+  })
+})
+
+describe('computeDepositDeadline (start date, else now + 4h)', () => {
+  const now = Date.parse('2026-09-08T12:00:00Z')
+  const GRACE = 4 * 60 * 60 * 1000
+
+  test('future start becomes the deadline verbatim', () => {
+    expect(computeDepositDeadline('2026-09-10T00:00:00Z', now)).toBe('2026-09-10T00:00:00.000Z')
+  })
+
+  test('past start falls back to now + 4h', () => {
+    expect(computeDepositDeadline('2026-01-01T00:00:00Z', now)).toBe(new Date(now + GRACE).toISOString())
+  })
+
+  test('missing/invalid start falls back to now + 4h', () => {
+    expect(computeDepositDeadline(undefined, now)).toBe(new Date(now + GRACE).toISOString())
+    expect(computeDepositDeadline('not-a-date', now)).toBe(new Date(now + GRACE).toISOString())
+  })
+
+  test('start exactly at now counts as past (strictly-future rule)', () => {
+    expect(computeDepositDeadline(new Date(now).toISOString(), now)).toBe(new Date(now + GRACE).toISOString())
   })
 })

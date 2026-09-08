@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 interface Campaign {
   id: string
   name: string
-  status: 'draft' | 'launched'
+  status: 'draft' | 'pending_deposit' | 'launched' | 'cancelled'
   reward_type: 'monetary' | 'digital' | 'physical'
   fee_split_bps: number
   company_a: string
@@ -17,6 +17,7 @@ interface Campaign {
   operatingDepositWei: string
   createdAt: string
   launchedAt: string | null
+  depositDeadline: string | null
 }
 
 const API = 'http://localhost:4000'
@@ -41,9 +42,12 @@ export default function CampaignsList() {
         const res = await fetch(`${API}/api/campaigns`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = (await res.json()) as Campaign[]
-        // Only campaigns that are live on-chain (launched with an escrow).
-        const live = data.filter((c) => c.status === 'launched' && c.escrow_address)
-        if (!cancelled) setCampaigns(live)
+        // Live campaigns (launched with an escrow) plus campaigns awaiting
+        // deposits — the handshake is part of the lifecycle, show it.
+        const visible = data.filter((c) =>
+          (c.status === 'launched' && c.escrow_address) || c.status === 'pending_deposit' || c.status === 'cancelled',
+        )
+        if (!cancelled) setCampaigns(visible)
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load campaigns')
       } finally {

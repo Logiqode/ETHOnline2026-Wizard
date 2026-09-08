@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import DepositHandshake from '../components/DepositHandshake'
 
 const API = 'http://localhost:4000'
 
 interface Campaign {
   id: string
   name: string
-  status: 'draft' | 'launched'
+  status: 'draft' | 'pending_deposit' | 'launched' | 'cancelled'
   reward_type: 'monetary' | 'digital' | 'physical'
   fee_split_bps: number
   company_a_name: string
@@ -17,6 +18,7 @@ interface Campaign {
   operatingDepositWei: string
   mechanics: Record<string, unknown>
   terms: Record<string, unknown>
+  depositDeadline: string | null
 }
 
 interface EscrowState {
@@ -357,6 +359,28 @@ export default function CampaignDetail() {
           {'  '}Campaign #{campaign.id} — {campaign.company_a_name} (POS) × {campaign.company_b_name} (Redeem)
         </p>
       </div>
+
+      {/* ── Deposit handshake (pending_deposit / cancelled) ─────────────── */}
+      {(campaign.status === 'pending_deposit' || campaign.status === 'cancelled') && (
+        campaign.status === 'cancelled' ? (
+          <div className="card">
+            <div className="card-title">Deposit handshake — cancelled</div>
+            <p className="field-hint">
+              The deposit deadline passed (or the creator cancelled) before both deposits landed — the campaign was
+              cancelled and nothing deployed on-chain. In production the deposited shares would refund off-chain.
+            </p>
+          </div>
+        ) : (
+          <DepositHandshake
+            campaignId={campaign.id}
+            feeSplitBps={campaign.fee_split_bps}
+            companyAName={campaign.company_a_name}
+            companyBName={campaign.company_b_name}
+            termsStart={campaign.terms?.start}
+            onChanged={load}
+          />
+        )
+      )}
 
       {/* ── Summary ─────────────────────────────────────────────────────── */}
       <div className="card">
