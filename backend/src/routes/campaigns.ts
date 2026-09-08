@@ -489,8 +489,13 @@ campaigns.post('/:id/deposits', async (c) => {
   const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
   if (rows.length === 0) return c.json({ error: 'Not found' }, 404)
   const row = await expireIfPastDeadline(rows[0])
-  if (row.status !== 'pending_deposit') {
-    return c.json({ error: `Campaign is ${row.status} — deposits only accepted while pending_deposit` }, 409)
+  // Accept deposits while pending_deposit (the normal handshake) OR as a
+  // late/repair backfill on a launched campaign whose record is missing a
+  // side (e.g. the record POST failed at launch time). The on-chain check
+  // below makes a backfill safe: only a tx that genuinely moved that side's
+  // exact share from the claimed wallet to the platform wallet is recorded.
+  if (row.status !== 'pending_deposit' && row.status !== 'launched') {
+    return c.json({ error: `Campaign is ${row.status} — deposits only accepted while pending_deposit or for launched-campaign backfill` }, 409)
   }
 
   const deposits = (row.deposits ?? {}) as Record<string, DepositRecord>
@@ -551,6 +556,16 @@ campaigns.post('/:id/deposits', async (c) => {
     }
   }
   const bothIn = Object.keys(updatedDeposits).length === 2
+
+  // Backfill path: the campaign is already launched — just record the missing
+  // side (no on-chain launch; it happened when the campaign went live).
+  if (row.status === 'launched') {
+    const updated = await sql<CampaignRow[]>`
+      UPDATE campaigns SET deposits = ${sql.json(updatedDeposits as never)}::jsonb
+      WHERE id = ${id} RETURNING *
+    `
+    return c.json({ ...toApi(updated[0]), backfilled: company, awaiting: bothIn ? null : other })
+  }
 
   if (!bothIn) {
     const updated = await sql<CampaignRow[]>`
@@ -866,6 +881,78 @@ const redeemBody = z.object({
   amount: z.number().positive(),
 })
 
+// Wallet-signed redeem (Company B's own Privy wallet): the client signs a
+// personal_sign statement and sends the SAME body plus `from` + `signature`.
+// The backend recovers the signer via ECDSA and requires it to be Company B's
+// deposit wallet (the wallet that paid B's share of the operating deposit —
+// the platform's record of "who Company B is"). The backend then relays the
+// redeemFor tx from the platform relay (the escrow's authorized redeemer);
+// B's wallet never pays gas and never needs on-chain redeemer rights — the
+// signature proves B authorized THIS redeem, the relay executes it.
+const walletRedeemBody = redeemBody.extend({
+  from: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
+})
+
+// Shared redeem core: relay signs + broadcasts redeemFor, reads back the
+// remaining spendable balance. mode only affects the note surfaced to the UI.
+async function redeemCore(row: CampaignRow, user: Address, amountWei: bigint, mode: 'relay' | 'wallet') {
+  const { createWalletClient, createPublicClient, http, parseAbi } = await import('viem')
+  const { baseSepolia } = await import('viem/chains')
+  const { privateKeyToAccount } = await import('viem/accounts')
+  const { loadEscrowState } = await import('../lib/escrowState')
+
+  const escrow = row.escrow_address as Address
+  const state = await loadEscrowState(escrow)
+  if (!state.redeemable) {
+    return { error: 'Not redeemable — this is a discount (proof-of-savings) campaign; nothing is spendable.', status: 400 as const }
+  }
+
+  const account = privateKeyToAccount(loadRelayKey())
+  const rpc = process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com'
+  const wallet = createWalletClient({ account, chain: baseSepolia, transport: http(rpc) })
+  const publicClient = createPublicClient({ chain: baseSepolia, transport: http(rpc) })
+
+  const abi = parseAbi(['function redeemFor(address user, uint256 amount)'])
+  const hash = await wallet.writeContract({
+    address: escrow,
+    abi,
+    functionName: 'redeemFor',
+    args: [user, amountWei],
+  })
+  const receipt = await publicClient.waitForTransactionReceipt({ hash })
+  if (receipt.status !== 'success') throw new Error(`redeem tx reverted: ${hash}`)
+
+  // Read back the remaining spendable balance.
+  const after = await loadEscrowState(escrow)
+  const p = after.participants.find((x) => x.address.toLowerCase() === user.toLowerCase())
+  const remaining = p ? (Number(p.unspentBalance) / 1e18).toFixed(2) : null
+
+  return {
+    body: {
+      ok: true,
+      txHash: hash,
+      user: user,
+      amount: (Number(amountWei) / 1e18).toFixed(2),
+      remaining,
+      note: mode === 'wallet'
+        ? `Redeemed by ${row.company_b_name} (wallet-signed) — burned from the user's spendable balance (lifetime ledger unchanged).`
+        : `Redeemed by the platform relay — burned from the user's spendable balance (lifetime ledger unchanged).`,
+    },
+  }
+}
+
+const redeemError = (msg: string) => {
+  // Surface the common reverts readably.
+  if (msg.includes('OnlyRedeemer')) return 'The relay wallet is not an authorized redeemer on this escrow (pre-gen-3 deployment?)'
+  if (msg.includes('InsufficientBalance')) return 'Insufficient spendable balance for that user/amount'
+  if (msg.includes('CampaignNotLive') || msg.includes('CampaignEnded')) return 'Campaign is not live (outside its window)'
+  return `Redeem failed: ${msg}`
+}
+
+// ── POST /:id/redeem — platform-relay redeem (bypass, no wallet needed) ──────
+// Demo/platform path: the backend's relay key IS the escrow's authorized
+// redeemer, so no user-side auth is required.
 campaigns.post('/:id/redeem', async (c) => {
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id) || id <= 0) {
@@ -890,53 +977,85 @@ campaigns.post('/:id/redeem', async (c) => {
   }
 
   try {
-    const { createWalletClient, createPublicClient, http, parseAbi } = await import('viem')
-    const { baseSepolia } = await import('viem/chains')
-    const { privateKeyToAccount } = await import('viem/accounts')
-    const { loadEscrowState, DEMO_USER_ANCHOR } = await import('../lib/escrowState')
-
-    const escrow = row.escrow_address as Address
-    const state = await loadEscrowState(escrow)
-    if (!state.redeemable) {
-      return c.json({ error: 'Not redeemable — this is a discount (proof-of-savings) campaign; nothing is spendable.' }, 400)
-    }
-
-    const user = getAddress(parsed.data.user) as Address // normalize EIP-55 casing (relay-side)
-    const amountWei = BigInt(Math.round(parsed.data.amount * 1e18))
-
-    const account = privateKeyToAccount(loadRelayKey())
-    const wallet = createWalletClient({ account, chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com') })
-    const publicClient = createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com') })
-
-    const abi = parseAbi(['function redeemFor(address user, uint256 amount)'])
-    const hash = await wallet.writeContract({
-      address: escrow,
-      abi,
-      functionName: 'redeemFor',
-      args: [user, amountWei],
-    })
-    const receipt = await publicClient.waitForTransactionReceipt({ hash })
-    if (receipt.status !== 'success') throw new Error(`redeem tx reverted: ${hash}`)
-
-    // Read back the remaining spendable balance.
-    const after = await loadEscrowState(escrow)
-    const p = after.participants.find((x) => x.address.toLowerCase() === user.toLowerCase())
-    const remaining = p ? (Number(p.unspentBalance) / 1e18).toFixed(2) : null
-
-    return c.json({
-      ok: true,
-      txHash: hash,
-      user: user,
-      amount: parsed.data.amount.toFixed(2),
-      remaining,
-      note: `Redeemed ${parsed.data.amount.toFixed(2)} ${row.reward_type === 'monetary' ? 'points' : 'units'} — burned from the user's spendable balance (lifetime ledger unchanged).`,
-    })
+    const user = getAddress(parsed.data.user) as Address
+    // Cents-exact (matches CampaignEscrow._requireAtMost2Decimals): integer
+    // cents × 1e16, never amount×1e18 float fuzz.
+    const amountWei = BigInt(Math.round(parsed.data.amount * 100)) * 10n ** 16n
+    const result = await redeemCore(row, user, amountWei, 'relay')
+    if ('error' in result && result.error) return c.json({ error: result.error }, result.status)
+    return c.json(result.body)
   } catch (err) {
-    const msg = (err as Error).message
-    // Surface the common reverts readably.
-    if (msg.includes('OnlyRedeemer')) return c.json({ error: 'The relay wallet is not an authorized redeemer on this escrow (pre-gen-3 deployment?)' }, 400)
-    if (msg.includes('InsufficientBalance')) return c.json({ error: 'Insufficient spendable balance for that user/amount' }, 400)
-    if (msg.includes('CampaignNotLive') || msg.includes('CampaignEnded')) return c.json({ error: 'Campaign is not live (outside its window)' }, 400)
-    return c.json({ error: `Redeem failed: ${msg}` }, 502)
+    return c.json({ error: redeemError((err as Error).message) }, 502)
+  }
+})
+
+// ── POST /:id/redeem/wallet — Company B wallet-signed redeem ────────────────
+// Auth story: B connects a Privy wallet (embedded/email — same login as the
+// deposit handshake), signs a plain-language statement over the redeem
+// details, and the backend verifies the signer IS B's deposited wallet before
+// relaying. Signature scope binds the campaign, user and amount — replaying
+// it for a different redeem fails the recovery comparison only if the body
+// differs, so the signed statement includes every field.
+campaigns.post('/:id/redeem/wallet', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: 'Invalid id' }, 400)
+  }
+  let body: unknown
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400)
+  }
+  const parsed = walletRedeemBody.safeParse(body)
+  if (!parsed.success) {
+    return c.json({ error: 'Validation failed', issues: parsed.error.flatten() }, 400)
+  }
+
+  const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
+  if (rows.length === 0) return c.json({ error: 'Not found' }, 404)
+  const row = rows[0]
+  if (row.status !== 'launched' || !row.escrow_address) {
+    return c.json({ error: 'Campaign has no on-chain escrow' }, 404)
+  }
+
+  // Auth check: the signer must be Company B's deposit wallet (checksummed at
+  // deposit time). No deposit recorded → nothing to compare against → refuse.
+  const deposits = (row.deposits ?? {}) as Record<string, DepositRecord>
+  const bWallet = deposits.B?.wallet?.toLowerCase()
+  if (!bWallet) {
+    return c.json({ error: 'Company B has no deposit wallet recorded for this campaign — wallet redeem unavailable' }, 400)
+  }
+  const { from, signature } = parsed.data
+  if (from.toLowerCase() !== bWallet) {
+    return c.json({ error: `Signer ${from} is not ${row.company_b_name}'s registered wallet (${deposits.B?.wallet})` }, 403)
+  }
+
+  // Verify the signature actually authorizes THIS redeem (recover the signer
+  // from personal_sign over the exact statement the client was shown).
+  const user = getAddress(parsed.data.user) as Address
+  const amount = parsed.data.amount
+  const statement = `Redeem ${amount.toFixed(2)} points from ${user} on campaign #${id} (${row.name}) as ${row.company_b_name}`
+  try {
+    const { verifyMessage } = await import('viem')
+    const valid = await verifyMessage({
+      address: from as Address,
+      message: statement,
+      signature: signature as Hex,
+    })
+    if (!valid) {
+      return c.json({ error: 'Signature does not match the redeem statement — sign the exact prompt shown' }, 403)
+    }
+  } catch {
+    return c.json({ error: 'Malformed signature' }, 400)
+  }
+
+  try {
+    const amountWei = BigInt(Math.round(amount * 100)) * 10n ** 16n
+    const result = await redeemCore(row, user, amountWei, 'wallet')
+    if ('error' in result && result.error) return c.json({ error: result.error }, result.status)
+    return c.json(result.body)
+  } catch (err) {
+    return c.json({ error: redeemError((err as Error).message) }, 502)
   }
 })

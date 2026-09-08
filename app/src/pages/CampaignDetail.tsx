@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { usePrivy, useWallets } from '@privy-io/react-auth'
 import DepositHandshake from '../components/DepositHandshake'
 
 const API = 'http://localhost:4000'
@@ -176,6 +177,19 @@ export default function CampaignDetail() {
   const [result, setResult] = useState<TriggerResult | null>(null)
   const [redeemForm, setRedeemForm] = useState({ user: '0xAAaA000000000000000000000000000000000001', amount: '1' })
   const [redeemResult, setRedeemResult] = useState<RedeemResult | null>(null)
+  // Wallet-signed redeem: Privy session (same login family as the deposit
+  // handshake — embedded wallet or email-linked). The signer must be Company
+  // B's deposited wallet, checked client-side for UX and enforced server-side.
+  const { ready: privyReady, authenticated, login, user: privyUser } = usePrivy()
+  const { wallets } = useWallets()
+  const privyWallet = wallets.find((w) => w.walletClientType === 'privy')
+  const linkedExternal = authenticated && privyUser?.wallet?.address
+    ? wallets.find((w) => w.address?.toLowerCase() === String(privyUser.wallet!.address).toLowerCase())
+    : undefined
+  const redeemWallet = privyWallet ?? linkedExternal
+  const redeemWalletAddress: string | null = authenticated
+    ? (redeemWallet?.address ?? (privyUser?.wallet?.address as string | undefined) ?? null)
+    : null
 
   const load = useCallback(async () => {
     if (!id) return
@@ -283,6 +297,44 @@ export default function CampaignDetail() {
         body: JSON.stringify({
           user: redeemForm.user,
           amount: Number(redeemForm.amount),
+        }),
+      })
+      const data = (await res.json()) as RedeemResult
+      setRedeemResult(data)
+      if (data.ok) setTimeout(load, 4000)
+    } catch (e) {
+      setRedeemResult({ error: e instanceof Error ? e.message : 'Request failed' })
+    } finally {
+      setSending('none')
+    }
+  }
+
+  // Wallet-signed redeem (Company B): sign a plain-language statement with the
+  // connected Privy wallet, then let the backend verify signer = B's deposit
+  // wallet before it relays the on-chain redeem. The statement must match the
+  // backend's expected string byte-for-byte.
+  const redeemWalletSigned = async () => {
+    if (!id || !campaign) return
+    if (!redeemWallet || !redeemWalletAddress) return
+    setSending('redeem')
+    setRedeemResult(null)
+    try {
+      const user = redeemForm.user as `0x${string}`
+      const amount = Number(redeemForm.amount)
+      const statement = `Redeem ${amount.toFixed(2)} points from ${user} on campaign #${id} (${campaign.name}) as ${campaign.company_b_name}`
+      const provider = await redeemWallet.getEthereumProvider()
+      const signature = (await provider.request({
+        method: 'personal_sign',
+        params: [statement, redeemWalletAddress],
+      })) as string
+      const res = await fetch(`${API}/api/campaigns/${id}/redeem/wallet`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user,
+          amount,
+          from: redeemWalletAddress,
+          signature,
         }),
       })
       const data = (await res.json()) as RedeemResult
@@ -706,13 +758,21 @@ export default function CampaignDetail() {
         </div>
       )}
 
-      {/* ── Redeem (Company B path: spend a user's points) ───────────────── */}
+      {/* ── Redeem (Reward-company path: spend a user's points) ───────────────
+          The company holding the wizard's "Reward minter / Redemption" role is
+          the one with redeem rights. With two participants that slot IS
+          company B (the wizard maps role:'reward' → companyB), and the wallet
+          check below keys off B's deposit wallet. If the wizard ever supports
+          >2 companies, the authorized redeemer set is whichever participant(s)
+          carry the reward role — the on-chain gate (authorizedRedeemers) is
+          per-wallet, so this extends without contract changes. */}
       {onchain && onchain.redeemable && (
         <div className="card">
           <div className="card-title">Redeem points</div>
           <div className="card-desc">
-            Company B (merchant) spends a user's earned points — burns them from the spendable balance;
-            the lifetime ledger is preserved. Sent by the platform relay (the escrow's authorized redeemer).
+            {campaign.company_b_name} (Reward / Redemption) spends a user's earned points — burns them from the
+            spendable balance; the lifetime ledger is preserved. Wallet-signed redeem is restricted to the
+            Reward company's own Privy wallet; the platform-relay path bypasses that check for demos/support.
           </div>
           <div className="grid-2" style={{ marginTop: 8 }}>
             <div className="field">
@@ -724,9 +784,37 @@ export default function CampaignDetail() {
               <input className="input" type="number" min="0" step="0.01" value={redeemForm.amount} onChange={(e) => setRedeemForm({ ...redeemForm, amount: e.target.value })} />
             </div>
           </div>
-          <button className="btn btn-primary" onClick={redeem} disabled={sending !== 'none'}>
-            {sending === 'redeem' ? 'Redeeming…' : 'Redeem'}
-          </button>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-primary"
+              disabled={sending !== 'none' || !privyReady}
+              title={`Production flow — ${campaign?.company_b_name ?? 'the Reward company'} signs the redeem with its Privy wallet; the backend verifies the signer is the Reward-side depositor before relaying`}
+              onClick={() => {
+                if (!privyReady) return
+                if (!authenticated || !redeemWalletAddress || !redeemWallet) { login(); return }
+                void redeemWalletSigned()
+              }}
+            >
+              {!privyReady ? 'Loading…'
+                : !authenticated ? 'Redeem (connect wallet)'
+                : sending === 'redeem' ? 'Redeeming…'
+                : 'Redeem'}
+            </button>
+            <button
+              className="btn"
+              onClick={redeem}
+              disabled={sending !== 'none'}
+              title="DEMO ONLY — bypasses wallet auth; the platform relay executes directly"
+            >
+              {sending === 'redeem' ? 'Redeeming…' : 'Demo redeem (no auth)'}
+            </button>
+          </div>
+          {authenticated && redeemWalletAddress && (
+            <p className="field-hint" style={{ marginTop: 6 }}>
+              Signed as <span className="mono">{short(redeemWalletAddress)}</span> — the backend accepts the redeem only if this
+              recovered signer matches the Reward company's deposit wallet.
+            </p>
+          )}
           {redeemResult && (
             <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: redeemResult.ok ? '#e3f2e9' : '#fdeceb' }}>
               {redeemResult.ok ? (
