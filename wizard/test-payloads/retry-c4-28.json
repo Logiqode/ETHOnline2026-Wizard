@@ -1,0 +1,9 @@
+{
+  "campaignId": 4,
+  "userAnchor": "0xAAaA000000000000000000000000000000000001",
+  "merchantId": "matcha-east-1",
+  "amountSpent": 28,
+  "timestamp": 1788884220,
+  "earnedInWindow": 0,
+  "items": ["matcha-latte"]
+}

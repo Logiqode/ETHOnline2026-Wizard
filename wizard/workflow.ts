@@ -181,11 +181,30 @@ export function evaluate(request: Request, campaign: EvalCampaign, campaignTotal
 	return { eligible: true, points, reason: 'ok' }
 }
 
-// Convert a reward amount to wei (1e18) as a bigint.
+// Convert a reward amount to wei (1e18) — INTEGER-EXACT, mirrors the escrow.
+// The escrow re-verifies the delivered pointsWei with strict equality against
+// its own integer math (CampaignEscrow.sol onReport → computePointsPreview),
+// so float fuzz here is fatal: 28 × 10% as a JS double is 2.8000000000000003,
+// and naive ×1e18 scaling delivers 2800000000000000500 while the escrow
+// expects exactly 2800000000000000000 — onReport reverts
+// CampaignEscrow__InvalidReport *inside the forwarder*, which swallows the
+// revert and still returns txStatus=SUCCESS (the "silent drop" of 2026-09-08).
+// Every escrow-valid value is an exact multiple of 1 micro-dollar: amounts are
+// ≤2 decimals (enforced on-chain) and points derive from rateBps(bps) × cents,
+// so rounding to micro-dollars first and scaling in integers is lossless and
+// reproduces the escrow's integer math bit-for-bit.
 function pointsToWei(points: number): bigint {
-	const scaled = Math.round(points * 1e18)
-	return BigInt(scaled.toLocaleString('en-US', { useGrouping: false }))
+	const micro = BigInt(Math.round(points * 1e6)) // nearest micro-dollar — kills float dust
+	return micro * 10n ** 12n
 }
+
+// Purchase amount → wei, cents-exact: integer cents × 1e16. A naive amount ×
+// 1e18 drifts for 2-decimal amounts (e.g. 3.33 → …707 wei), which would shift
+// the escrow's own computePointsPreview away from our pointsWei.
+function amountToWei(amount: number): bigint {
+	return BigInt(Math.round(amount * 100)) * 10n ** 16n
+}
+export { pointsToWei, amountToWei } // test-only scaffolding (see workflow.test.ts)
 
 // ─── On-chain reads (enclave → factory/escrow, via EVM capability) ──────────
 // The factory is the "workflow master": campaign terms are read at request
@@ -535,7 +554,7 @@ export const onHTTPTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 	// report = abi.encode(nullifier, recipient, amountSpentWei, eligible, pointsWei).
 	const reportPayload = encodeAbiParameters(
 		parseAbiParameters('bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei'),
-		[nullifier, userAnchor, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)],
+		[nullifier, userAnchor, amountToWei(request.amountSpent), true, pointsToWei(verdict.points)],
 	)
 
 	// Cross back to the DON for consensus (DON signs the report), then write it.

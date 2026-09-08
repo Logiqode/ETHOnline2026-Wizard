@@ -23464,8 +23464,11 @@ function evaluate(request, campaign, campaignTotalEarned = 0) {
   return { eligible: true, points, reason: "ok" };
 }
 function pointsToWei(points) {
-  const scaled = Math.round(points * 1000000000000000000);
-  return BigInt(scaled.toLocaleString("en-US", { useGrouping: false }));
+  const micro = BigInt(Math.round(points * 1e6));
+  return micro * 10n ** 12n;
+}
+function amountToWei(amount) {
+  return BigInt(Math.round(amount * 100)) * 10n ** 16n;
 }
 var FACTORY_ABI = [
   {
@@ -23677,7 +23680,7 @@ var onHTTPTrigger = (runtime2, payload) => {
     runtime2.log(`ineligible (${verdict.reason}) — no on-chain write`);
     return `REJECT points=0 reason=${verdict.reason}`;
   }
-  const reportPayload = encodeAbiParameters(parseAbiParameters("bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei"), [nullifier, userAnchor, pointsToWei(request.amountSpent), true, pointsToWei(verdict.points)]);
+  const reportPayload = encodeAbiParameters(parseAbiParameters("bytes32 nullifier, address recipient, uint256 amountSpentWei, bool eligible, uint256 pointsWei"), [nullifier, userAnchor, amountToWei(request.amountSpent), true, pointsToWei(verdict.points)]);
   const donRuntime = runtime2.usingTheDons();
   const reportResponse = donRuntime.report({
     encodedPayload: hexToBase64(reportPayload),

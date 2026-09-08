@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { deriveNullifier, evaluate, type OnChainCampaign } from './workflow'
+import { amountToWei, deriveNullifier, evaluate, pointsToWei, type OnChainCampaign } from './workflow'
 
 // Direct unit tests of the eligibility evaluator — pure logic, no runtime, no
 // EVM mock. The on-chain read path (factory → terms) is verified by
@@ -247,5 +247,45 @@ describe('deriveNullifier — per-purchase freshness', () => {
 		// one more purchase after the cap is fully consumed → rejected (0)
 		const third = Math.min((1000 * 30) / 10_000, Math.max(100 - first - second, 0))
 		expect(third).toBe(0)
+	})
+})
+
+// ─── Wei conversion — must match the escrow's integer math EXACTLY ──────────
+// The escrow's onReport re-verifies pointsWei with strict equality against
+// CampaignRulesLib.computePoints (integer: rateBps × amountWei / 10000). The
+// 2026-09-08 silent-drop bug: 28 × 10% is the JS double 2.8000000000000003,
+// naive ×1e18 scaling sent 2800000000000000500, onReport reverted
+// CampaignEscrow__InvalidReport inside the forwarder, txStatus stayed SUCCESS
+// and nothing minted. These tests pin the integer-exact path.
+describe('wei conversion — integer-exact vs the escrow re-verification', () => {
+	// Solidity mirror: (rateBps * amountWei) / 10000, in pure bigint math.
+	const onChainPoints = (rateBps: bigint, amountWei: bigint) => (rateBps * amountWei) / 10_000n
+
+	test('the exact production failure: $28 @ 10% (execution 0xad42…70e5)', () => {
+		const amountWei = amountToWei(28)
+		expect(amountWei).toBe(28n * 10n ** 18n)
+		// delivered pointsWei must equal what the escrow recomputes on-chain
+		expect(pointsToWei(2.8000000000000003)).toBe(2800000000000000000n)
+		expect(pointsToWei((1000 / 10_000) * 28)).toBe(onChainPoints(1000n, amountWei))
+	})
+
+	test('no float dust for arbitrary percent amounts (2-decimal spends)', () => {
+		for (const amount of [0.01, 3.33, 9.99, 12.5, 28, 104.27, 999.99]) {
+			const amountWei = amountToWei(amount)
+			// ≤2 decimals enforced on-chain → exact cents in wei
+			expect(amountWei % 10n ** 16n).toBe(0n)
+			expect(amountWei).toBe(BigInt(Math.round(amount * 100)) * 10n ** 16n)
+			// 10% cashback recomputed on-chain matches what we'd deliver
+			expect(pointsToWei((1000 / 10_000) * amount)).toBe(onChainPoints(1000n, amountWei))
+		}
+	})
+
+	test('capped points convert exactly (per-tx cap 10 on $28 → …0500 must never appear)', () => {
+		expect(pointsToWei(10)).toBe(10n * 10n ** 18n)
+		expect(pointsToWei(10).toString()).not.toContain('0500')
+	})
+
+	test('flat mechanic values convert exactly ($2.00 per purchase)', () => {
+		expect(pointsToWei(2)).toBe(2n * 10n ** 18n)
 	})
 })

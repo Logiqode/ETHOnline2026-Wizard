@@ -82,7 +82,14 @@ export interface CreateCampaignResult {
 }
 
 // 18-decimal USD helper for min-spend/cap values (contract expects 18-dec fixed).
-export const usdToWei = (dollars: number): bigint => BigInt(Math.round(dollars * 1e18))
+// Cents-exact: integer cents × 1e16. A naive dollars×1e18 round-trips through a
+// double that only holds 2^53 (~9e15) exactly — at $100k the naive form is off
+// by 16,777,216 wei (200000 → 199999999999999983222784). That fuzz is harmless
+// until a claim lands exactly on the cap boundary, where the workflow's
+// integer math and the stored value diverge and onReport reverts (the
+// 2026-09-08 silent-drop class). Wizard amounts are ≤2 decimals, so cents
+// scaling is lossless and matches CampaignEscrow._requireAtMost2Decimals.
+export const usdToWei = (dollars: number): bigint => BigInt(Math.round(dollars * 100)) * 10n ** 16n
 
 /** Read `KEY=value` from the repo-root .env (bun auto-loads only backend/.env). */
 export async function readRootEnvVar(key: string): Promise<string | undefined> {
