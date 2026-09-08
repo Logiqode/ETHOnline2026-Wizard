@@ -486,7 +486,7 @@ export default function CampaignDetail() {
                     return (
                       <tr key={p.address}>
                         <td style={tdStyle}><span className="mono"><a href={explorer(p.address)} target="_blank" rel="noreferrer">{short(p.address)}</a></span></td>
-                        <td style={tdStyle}><span className="mono">{total.toFixed(2)} {rv.cashbackToken ?? 'points'}</span></td>
+                        <td style={tdStyle}><span className="mono">{onchain.redeemable ? `${total.toFixed(2)} ${rv.cashbackToken ?? 'points'}` : `$${total.toFixed(2)}`}</span></td>
                         {onchain.redeemable && <td style={tdStyle}><span className="mono">{unspent.toFixed(2)} {rv.cashbackToken ?? 'points'}</span></td>}
                         <td style={tdStyle}><span className="mono">{capCell}</span></td>
                         <td style={tdStyle}>{p.claims}</td>
