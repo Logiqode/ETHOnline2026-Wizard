@@ -24,12 +24,14 @@ contract CampaignFactory {
     error CampaignFactory__InvalidFeeAccount(address account);
     error CampaignFactory__DepositRequired(uint256 required, uint256 received);
     error CampaignFactory__InvalidSalt();
+    error CampaignFactory__InvalidCampaign(uint256 campaignId);
 
     /*//////////////////////////////////////////////////////////////
                                 EVENTS
     //////////////////////////////////////////////////////////////*/
 
     event CampaignCreated(uint256 indexed campaignId, address indexed escrow, address indexed reward);
+    event CampaignRedeemerSet(uint256 indexed campaignId, address indexed wallet, bool allowed);
     event OperatingDeposit(
         uint256 indexed campaignId,
         uint256 total,
@@ -141,6 +143,20 @@ contract CampaignFactory {
     /// @notice Predict the escrow address a campaign would get for a given salt.
     function predictEscrowAddress(bytes32 salt_) external view returns (address) {
         return Clones.predictDeterministicAddress(escrowImplementation, salt_);
+    }
+
+    /// @notice Factory-admin passthrough: grant/revoke a redeemer on a campaign's
+    ///         escrow. The escrow's `owner` IS this factory, and clones are
+    ///         immutable — without this passthrough the escrow's
+    ///         `authorizedRedeemers` whitelist is dead code (gen-5 lesson: every
+    ///         redeem on deployed escrows reverted OnlyRedeemer forever). The
+    ///         demo platform (deployer) uses it to authorize the relay wallet
+    ///         post-launch; production would route it through per-company policy.
+    function setCampaignRedeemer(uint256 campaignId, address wallet, bool allowed) external {
+        CampaignInfo memory info = campaigns[campaignId];
+        if (info.escrow == address(0)) revert CampaignFactory__InvalidCampaign(campaignId);
+        CampaignEscrow(info.escrow).setRedeemer(wallet, allowed);
+        emit CampaignRedeemerSet(campaignId, wallet, allowed);
     }
 
     /// @dev Base Sepolia CRE production forwarder — the only caller allowed to
