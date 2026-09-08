@@ -85,10 +85,10 @@ const DEFAULT_REWARD_VALUES: Record<string, string | number | boolean> = {
 // (bps integer or % with 2 decimals). Whichever side was edited last drives
 // the other as the complement, so the two always total 100%.
 const DEFAULT_LAUNCH = {
-  feeSplitA: '5000',
-  feeSplitB: '5000',
+  feeSplitA: '50.00',
+  feeSplitB: '50.00',
   feeSplitLast: 'a' as 'a' | 'b',
-  feeSplitUnit: 'bps' as 'bps' | 'pct',
+  feeSplitUnit: 'pct' as 'bps' | 'pct',
   companyAFeeAddress: '0x1111111111111111111111111111111111111111',
   companyBFeeAddress: '0x2222222222222222222222222222222222222222',
 }

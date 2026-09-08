@@ -23,7 +23,8 @@ interface Campaign {
 const API = 'http://localhost:4000'
 
 export default function CampaignsList() {
-  const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  const [live, setLive] = useState<Campaign[]>([])
+  const [pending, setPending] = useState<Campaign[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [seeding, setSeeding] = useState(false)
@@ -41,13 +42,11 @@ export default function CampaignsList() {
 
         const res = await fetch(`${API}/api/campaigns`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = (await res.json()) as Campaign[]
-        // Live campaigns (launched with an escrow) plus campaigns awaiting
-        // deposits — the handshake is part of the lifecycle, show it.
-        const visible = data.filter((c) =>
-          (c.status === 'launched' && c.escrow_address) || c.status === 'pending_deposit' || c.status === 'cancelled',
-        )
-        if (!cancelled) setCampaigns(visible)
+        const data = (await res.json()) as { live: Campaign[]; pending: Campaign[] }
+        if (!cancelled) {
+          setLive(data.live)
+          setPending(data.pending)
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load campaigns')
       } finally {
@@ -77,60 +76,107 @@ export default function CampaignsList() {
       <div className="page-header">
         <h1 className="page-title">Campaigns</h1>
         <p className="page-subtitle">
-          Campaigns live on Base Sepolia — the factory-seeded demos plus anything launched from the wizard. Click a
-          campaign for its summary, balances, and test payloads.
+          Active campaigns are verified against the live Base Sepolia factory — the factory registry is the source of
+          truth. Pending campaigns exist only in the local database until both deposit handshake shares land on-chain.
+          Click a campaign for its summary, balances, and test payloads.
         </p>
       </div>
 
-      {campaigns.length === 0 ? (
-        <div className="card">
-          <p className="card-desc">No live campaigns yet — launch one from the <strong>Campaign Wizard</strong>.</p>
+      {/* ── Pending handshake (DB-only: no escrow exists yet) ─────────────── */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-title">Pending campaigns</div>
+        <div className="card-desc">
+          Awaiting the deposit handshake (or cancelled after the deadline) — not yet on-chain, listed from the local
+          database only.
         </div>
-      ) : (
-        <div className="card">
-          <table className="campaigns-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Reward</th>
-                <th>Fee split (A)</th>
-                <th>Salt</th>
-                <th>Escrow</th>
-              </tr>
-            </thead>
-            <tbody>
-              {campaigns.map((c) => (
-                <tr key={c.id}>
-                  <td className="mono">{c.id}</td>
-                  <td>
-                    <Link to={`/campaigns/${c.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>
-                      {c.name}
-                    </Link>
-                  </td>
-                  <td><span className={`status status-${c.status}`}>{c.status}</span></td>
-                  <td>{c.reward_type}</td>
-                  <td className="mono">{(c.fee_split_bps / 100).toFixed(0)}%</td>
-                  <td className="mono salt-cell">{c.salt ? `${c.salt.slice(0, 10)}…` : '—'}</td>
-                  <td className="mono">
-                    {c.escrow_address ? (
-                      <a
-                        href={`https://sepolia.basescan.org/address/${c.escrow_address}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ color: 'inherit' }}
-                      >
-                        {c.escrow_address.slice(0, 10)}…
-                      </a>
-                    ) : '—'}
-                  </td>
+        {pending.length === 0 ? (
+          <p className="field-hint">No pending campaigns.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="campaigns-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Fee split (A)</th>
+                  <th>Deposit deadline</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {pending.map((c) => (
+                  <tr key={c.id}>
+                    <td className="mono">{c.id}</td>
+                    <td>
+                      <Link to={`/campaigns/${c.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>
+                        {c.name}
+                      </Link>
+                    </td>
+                    <td><span className={`status status-${c.status}`}>{c.status}</span></td>
+                    <td className="mono">{(c.fee_split_bps / 100).toFixed(0)}%</td>
+                    <td className="mono">
+                      {c.depositDeadline
+                        ? new Date(c.depositDeadline).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* ── Active on-chain (factory-registry verified) ───────────────────── */}
+      <div className="card">
+        <div className="card-title">Active campaigns</div>
+        <div className="card-desc">Verified live on Base Sepolia against the factory registry.</div>
+        {live.length === 0 ? (
+          <p className="field-hint">No live campaigns yet — launch one from the <strong>Campaign Wizard</strong>.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="campaigns-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Name</th>
+                  <th>Reward</th>
+                  <th>Fee split (A)</th>
+                  <th>Salt</th>
+                  <th>Escrow</th>
+                </tr>
+              </thead>
+              <tbody>
+                {live.map((c) => (
+                  <tr key={c.id}>
+                    <td className="mono">{c.id}</td>
+                    <td>
+                      <Link to={`/campaigns/${c.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>
+                        {c.name}
+                      </Link>
+                    </td>
+                    <td>{c.reward_type}</td>
+                    <td className="mono">{(c.fee_split_bps / 100).toFixed(0)}%</td>
+                    <td className="mono salt-cell">{c.salt ? `${c.salt.slice(0, 10)}…` : '—'}</td>
+                    <td className="mono">
+                      {c.escrow_address ? (
+                        <a
+                          href={`https://sepolia.basescan.org/address/${c.escrow_address}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: 'inherit' }}
+                        >
+                          {c.escrow_address.slice(0, 10)}…
+                        </a>
+                      ) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

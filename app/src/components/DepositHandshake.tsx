@@ -30,33 +30,54 @@ export default function DepositHandshake({ campaignId, feeSplitBps, companyAName
   const { ready, authenticated, user, login, logout } = usePrivy()
   const { wallets } = useWallets()
   const [state, setState] = useState<HandshakeState | null>(null)
+  // Deposits already recorded server-side (wallet per side) — refreshed from
+  // the campaign record so a page reload (or a second browser) sees who has
+  // deposited; never trust local state alone for the "already deposited" UI.
+  const [deposited, setDeposited] = useState<{ A?: string; B?: string }>({})
   const [busy, setBusy] = useState<'A' | 'B' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
 
-  // The connected embedded wallet (Privy-created). Prefer the embedded wallet;
-  // fall back to the first linked wallet.
-  const embedded = wallets.find((w) => w.walletClientType === 'privy') ?? wallets[0]
-  const walletAddress: string | null = embedded?.address ?? (user?.wallet?.address as string | undefined) ?? null
+  // The panel's wallet: prefer the Privy embedded wallet; else an external the
+  // user explicitly linked at login (user.wallet). NEVER a silently-connected
+  // injected wallet — MetaMask re-exposes accounts to a previously-approved
+  // origin on every load even after Privy's storage is cleared, so wallets[0]
+  // can be a phantom connection that pins the wrong side.
+  const privyWallet = wallets.find((w) => w.walletClientType === 'privy')
+  const linkedExternal = authenticated && user?.wallet?.address
+    ? wallets.find((w) => w.address?.toLowerCase() === String(user.wallet!.address).toLowerCase())
+    : undefined
+  const embedded = privyWallet ?? linkedExternal
+  const walletAddress: string | null = authenticated
+    ? (embedded?.address ?? (user?.wallet?.address as string | undefined) ?? null)
+    : null
 
-  // Determine which side this wallet represents. The campaign row's
-  // company_a/company_b hold the wallet captured at record time; before any
-  // deposit, the first connect claims A, the second claims B.
-  const [claimA, setClaimA] = useState<string | null>(null)
-  const [claimB, setClaimB] = useState<string | null>(null)
-
+  // Which side does THIS wallet represent? The side the user *chose* (pinned
+  // by clicking A's or B's connect/deposit button) wins; without a pin, an
+  // unclaimed wallet takes the first open side. Deposited wallets are always
+  // pinned to their side regardless of local state.
+  const [pinned, setPinned] = useState<'A' | 'B' | null>(null)
   const side: 'A' | 'B' | null = walletAddress
-    ? claimA?.toLowerCase() === walletAddress.toLowerCase() ? 'A'
-      : claimB?.toLowerCase() === walletAddress.toLowerCase() ? 'B'
-        : !claimA ? 'A' : !claimB ? 'B' : null
+    ? deposited.A?.toLowerCase() === walletAddress.toLowerCase() ? 'A'
+      : deposited.B?.toLowerCase() === walletAddress.toLowerCase() ? 'B'
+        : pinned ?? (!deposited.A ? 'A' : !deposited.B ? 'B' : null)
     : null
 
   const initiate = async (): Promise<HandshakeState> => {
     const res = await fetch(`${API}/api/campaigns/${campaignId}/deposits/initiate`, { method: 'POST' })
-    const data = await res.json() as HandshakeState & { error?: string }
+    const data = await res.json() as HandshakeState & { deposits?: { A?: { wallet: string }; B?: { wallet: string } }; error?: string }
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
     const s: HandshakeState = { shares: data.shares, platformWallet: data.platformWallet }
     setState(s)
+    // The initiate response is the full campaign row: harvest any deposits
+    // already recorded (e.g. this page was reloaded after A paid).
+    if (data.deposits) {
+      setDeposited({
+        ...(data.deposits.A ? { A: data.deposits.A.wallet } : {}),
+        ...(data.deposits.B ? { B: data.deposits.B.wallet } : {}),
+      })
+    }
     return s
   }
 
@@ -94,14 +115,48 @@ export default function DepositHandshake({ campaignId, feeSplitBps, companyAName
         body: JSON.stringify({ company: side, wallet: walletAddress, txHash }),
       })
       const data = await res.json() as { error?: string; onchainTxHash?: string }
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+      if (!res.ok) {
+        // The backend reads its RPC immediately; a just-broadcast tx may not be
+        // indexed yet ("not found or failed"). Wait, then retry — two rounds
+        // (~10s total) before surfacing the error to the user. Only retry on
+        // the not-found class of error; real rejections (wrong amount, wrong
+        // wallet) surface immediately.
+        const retryable = /not found|failed on-chain|does not carry/i.test(data.error ?? '')
+        if (!retryable) throw new Error(data.error ?? `HTTP ${res.status}`)
+        let lastErr = data.error ?? `HTTP ${res.status}`
+        for (const delayMs of [5000, 5000]) {
+          setDone(`Deposit ${side} sent (${txHash.slice(0, 10)}…) — waiting for it to index…`)
+          await new Promise((r) => setTimeout(r, delayMs))
+          const retry = await fetch(`${API}/api/campaigns/${campaignId}/deposits`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ company: side, wallet: walletAddress, txHash }),
+          })
+          const rdata = await retry.json() as { error?: string; onchainTxHash?: string }
+          if (retry.ok) {
+            if (rdata.onchainTxHash) {
+              setDone(`Both deposits confirmed — campaign launched on-chain (createCampaign tx ${rdata.onchainTxHash.slice(0, 10)}…).`)
+            } else {
+              setDone(`Deposit ${side} recorded. Awaiting the other company.`)
+            }
+            setDeposited((d) => ({ ...d, [side]: walletAddress }))
+            onChanged()
+            return
+          }
+          lastErr = rdata.error ?? `HTTP ${retry.status}`
+          // A specific rejection (not "not found") — stop waiting, surface it.
+          if (!/not found|failed on-chain|does not carry/i.test(lastErr)) throw new Error(lastErr)
+        }
+        throw new Error(`${lastErr} — if this was recent, give it a moment and refresh; the backend will accept it on the next attempt.`)
+      }
       if (data.onchainTxHash) {
         setDone(`Both deposits confirmed — campaign launched on-chain (createCampaign tx ${data.onchainTxHash.slice(0, 10)}…).`)
       } else {
         setDone(`Deposit ${side} recorded. Awaiting the other company.`)
       }
-      // Record the claim so the panel shows who deposited which side.
-      if (side === 'A') setClaimA(walletAddress); else setClaimB(walletAddress)
+      // Pin this wallet's claim in local state too (the initiate refresh will
+      // confirm it from the DB on next load).
+      setDeposited((d) => ({ ...d, [side]: walletAddress }))
       onChanged()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Deposit failed')
@@ -134,48 +189,88 @@ export default function DepositHandshake({ campaignId, feeSplitBps, companyAName
       <div className="insight-row">
         <span className="insight-label">{companyAName} (A)</span>
         <span className="insight-value">
-          {claimA ? `deposited ${short(claimA)}` : `${shareA} ETH — deposit A`}
-          <button
-            className="btn btn-primary"
-            style={{ marginLeft: 12 }}
-            disabled={busy !== null || (side !== null && side !== 'A')}
-            onClick={() => {
-              if (!ready) return
-              if (!authenticated) { login(); return }
-              if (side === null) { setError('Both sides are already claimed by other wallets'); return }
-              void deposit('A')
-            }}
-          >
-            {busy === 'A' ? 'Depositing…' : authenticated ? (side === 'A' ? `Deposit as ${companyAName}` : 'Wallet claimed other side') : 'Connect wallet (A)'}
-          </button>
+          {deposited.A ? `deposited ${short(deposited.A)}` : `${shareA} ETH — deposit A`}
+          {deposited.A ? null : (
+            <button
+              className="btn btn-primary"
+              style={{ marginLeft: 12 }}
+              disabled={busy !== null || (side !== null && side !== 'A')}
+              onClick={() => {
+                if (!ready) return
+                setPinned('A')
+                if (!authenticated) { login(); return }
+                if (side === null) { setError('Both sides are already claimed by other wallets'); return }
+                void deposit('A')
+              }}
+            >
+              {busy === 'A' ? 'Depositing…' : authenticated ? (side === 'A' ? `Deposit as ${companyAName}` : 'Wallet claimed other side') : 'Connect wallet (A)'}
+            </button>
+          )}
         </span>
       </div>
       <div className="insight-row">
         <span className="insight-label">{companyBName} (B)</span>
         <span className="insight-value">
-          {claimB ? `deposited ${short(claimB)}` : `${shareB} ETH — deposit B`}
-          <button
-            className="btn btn-primary"
-            style={{ marginLeft: 12 }}
-            disabled={busy !== null || (side !== null && side !== 'B')}
-            onClick={() => {
-              if (!ready) return
-              if (!authenticated) { login(); return }
-              if (side === null) { setError('Both sides are already claimed by other wallets'); return }
-              void deposit('B')
-            }}
-          >
-            {busy === 'B' ? 'Depositing…' : authenticated ? (side === 'B' ? `Deposit as ${companyBName}` : 'Wallet claimed other side') : 'Connect wallet (B)'}
-          </button>
+          {deposited.B ? `deposited ${short(deposited.B)}` : `${shareB} ETH — deposit B`}
+          {deposited.B ? null : (
+            <button
+              className="btn btn-primary"
+              style={{ marginLeft: 12 }}
+              disabled={busy !== null || (side !== null && side !== 'B')}
+              onClick={() => {
+                if (!ready) return
+                setPinned('B')
+                if (!authenticated) { login(); return }
+                if (side === null) { setError('Both sides are already claimed by other wallets'); return }
+                void deposit('B')
+              }}
+            >
+              {busy === 'B' ? 'Depositing…' : authenticated ? (side === 'B' ? `Deposit as ${companyBName}` : 'Wallet claimed other side') : 'Connect wallet (B)'}
+            </button>
+          )}
         </span>
       </div>
       {authenticated && walletAddress && (
         <p className="field-hint">
-          Connected: <span className="mono">{short(walletAddress)}</span> (Privy embedded wallet){' '}
-          <button className="linklike" onClick={() => void logout()}>disconnect</button>
+          Connected: <button
+            className="linklike mono"
+            title="Click to copy the full address"
+            onClick={() => {
+              void navigator.clipboard.writeText(walletAddress)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1500)
+            }}
+          >
+            {copied ? 'copied!' : short(walletAddress)}
+          </button>{' '}
+          (Privy embedded wallet){' '}
+          <button className="linklike" onClick={() => { void logout(); setDeposited({}); setError(null); setDone(null) }}>disconnect / switch identity</button>
+          <span style={{ opacity: 0.7 }}> — clears this browser's Privy session so a different company email can log in</span>
         </p>
       )}
       {error && <p className="launch-error" role="alert">⚠️ {error}</p>}
+      <p className="field-hint" style={{ opacity: 0.7 }}>
+        DEBUG:{' '}
+        <button
+          className="linklike"
+          title="Nukes every Privy storage key in this browser (localStorage, sessionStorage, cookies) and reloads — use when the Privy session is stuck and logout() didn't clear it"
+          onClick={() => {
+            for (const store of [window.localStorage, window.sessionStorage]) {
+              for (const key of Object.keys(store)) {
+                if (/privy|privy-io/i.test(key)) store.removeItem(key)
+              }
+            }
+            for (const cookie of document.cookie.split(';')) {
+              const name = cookie.split('=')[0]?.trim()
+              if (name && /privy/i.test(name)) document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`
+            }
+            window.location.reload()
+          }}
+        >
+          force-clear Privy session
+        </button>{' '}
+        — removes all Privy tokens/storage for this browser and reloads the page (debug only; a fresh login will provision a new embedded wallet).
+      </p>
       <p className="field-hint" style={{ opacity: 0.7 }}>
         DEMO: deposits are real Base Sepolia transfers verified on-chain by the backend; wallet↔company attribution is
         claimed client-side (no auth in the demo backend). Production binds wallets to authenticated company identities.

@@ -55,13 +55,19 @@ campaigns.post('/', async (c) => {
 })
 
 // GET /api/campaigns — list campaigns
-// Only campaigns the LIVE factory knows about are listed: a DB row counts as
-// live if it carries an onchainCampaignId whose factory entry matches the
-// row's escrow, or (wizard-launched rows) whose escrow was created by this
-// factory. Anything else (stale rows from superseded factory generations) is
-// hidden — the DB is bookkeeping, the factory registry is the source of truth.
+// Two list semantics in one response:
+//   - `live`: campaigns the LIVE factory registry verifies (DB row's escrow
+//     appears in the factory's campaigns() mapping — the on-chain truth).
+//   - `pending`: DB rows in the deposit handshake (`pending_deposit`) or
+//     cancelled — no escrow exists yet, so the factory can't know them; they
+//     live only in the DB until both deposits land (or the deadline passes).
+// Stale rows from superseded factory generations are hidden from `live`
+// (the DB is bookkeeping, the factory registry is the source of truth).
 campaigns.get('/', async (c) => {
   const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns ORDER BY id DESC`
+
+  // Handshake rows: pre-launch (or cancelled) — DB-only by definition.
+  const pending = rows.filter((row) => row.status === 'pending_deposit' || row.status === 'cancelled')
 
   // Resolve the live factory registry once: id -> escrow address.
   let registry: Map<number, string> | null = null
@@ -91,7 +97,7 @@ campaigns.get('/', async (c) => {
     const escrowLower = row.escrow_address.toLowerCase()
     return [...registry.values()].includes(escrowLower)
   })
-  return c.json(live.map(toApi))
+  return c.json({ live: live.map(toApi), pending: pending.map(toApi) })
 })
 
 // GET /api/campaigns/:id
@@ -254,14 +260,33 @@ async function launchOnChainAndRecord(
   const daysMask = dowEnabled ? 127 : 0 // every day allowed when the rule is on with no selection
 
   // ── Reward mechanic mapping (mirrors CampaignRulesLib.computePoints) ──────
-  // 'monetary' = cashback: percent (rateBps% of spend) or flat (fixed per
-  // purchase). 'discount' = proof-of-savings: redeemable=false, the computed
-  // value is dollars saved — it lands in the user's totalSaved counter only.
-  const cashbackType = String(rv.cashbackType ?? 'percent')
-  const flatEnabled = mechanics?.rewardType === 'monetary' && cashbackType === 'flat'
-  const rateBps = flatEnabled ? 0 : Math.round(Number(rv.cashbackRate ?? 0) * 100)
-  const flatValueWei = flatEnabled ? usdToWei(Number(rv.cashbackFlat ?? 0)) : 0n
-  const redeemable = mechanics?.rewardType !== 'discount'
+  // The wizard's authoritative selector is rewardBlocks (cashback vs discount
+  // toggle); rewardType stays 'monetary' for both. Legacy rows (seeded) have
+  // no rewardBlocks → treat as cashback. Discount = proof-of-savings:
+  // redeemable=false, the computed value lands in totalSaved only.
+  // Type strings are display values: 'Flat/Fixed' / 'Percentage (%)'.
+  const rewardBlocks = (mechanics as { rewardBlocks?: Record<string, string> } | undefined)?.rewardBlocks
+  const isDiscount = rewardBlocks
+    ? rewardBlocks.discount === 'enabled'
+    : String(launchRewardType) === 'discount'
+  const redeemable = !isDiscount
+  let flatEnabled: boolean
+  let rateBps: number
+  let flatValueWei: bigint
+  if (isDiscount) {
+    // Discount mechanic: Flat/Fixed → flatValue per purchase; Percentage (%) →
+    // rateBps% of spend. Both accrue to totalSaved (nothing redeemable).
+    const isPct = rv.discountType === 'Percentage (%)'
+    flatEnabled = !isPct
+    flatValueWei = flatEnabled ? usdToWei(Number(rv.discountValue ?? 0)) : 0n
+    rateBps = isPct ? Math.round(Number(rv.discountValue ?? 0) * 100) : 0
+  } else {
+    // Cashback mechanic: Flat/Fixed → flatValue per purchase; else percent.
+    const isFlat = rv.cashbackType === 'Flat/Fixed'
+    flatEnabled = isFlat
+    flatValueWei = isFlat ? usdToWei(Number(rv.cashbackFlat ?? 0)) : 0n
+    rateBps = isFlat ? 0 : Math.round(Number(rv.cashbackRate ?? 0) * 100)
+  }
   // Per-transaction cap (now on-chain in Rules). For percent cashback the UI
   // value is in reward units ($); for percent discounts it's a % of spend —
   // same semantics the wizard displays. Off when the toggle is off.
@@ -391,6 +416,19 @@ campaigns.post('/:id/deposits/initiate', async (c) => {
   const rows = await sql<CampaignRow[]>`SELECT * FROM campaigns WHERE id = ${id}`
   if (rows.length === 0) return c.json({ error: 'Not found' }, 404)
   const row = await expireIfPastDeadline(rows[0])
+  // Idempotent: re-initiating a pending campaign just returns its current
+  // handshake state (the wizard flips the status at launch, then the detail
+  // page's panel auto-initiates on mount — that second call must not 409).
+  if (row.status === 'pending_deposit') {
+    return c.json({
+      ...toApi(row),
+      shares: {
+        A: depositShareWei(row.fee_split_bps, 'A').toString(),
+        B: depositShareWei(row.fee_split_bps, 'B').toString(),
+      },
+      platformWallet: PLATFORM_WALLET,
+    })
+  }
   if (row.status !== 'draft') {
     return c.json({ error: `Campaign is ${row.status}, not draft — initiate only works on drafts` }, 409)
   }
@@ -468,6 +506,12 @@ campaigns.post('/:id/deposits', async (c) => {
   // ── On-chain verification: the tx must be a real transfer of the exact ──
   // share from the claimed wallet to the platform wallet.
   const shareWei = depositShareWei(row.fee_split_bps, company)
+  // Normalize the wallet to EIP-55 checksum casing: clients send mixed/lower
+  // casing, and the launch path (createCampaignOnChain) passes these wallets
+  // straight to viem's encodeFunctionData, which rejects non-checksummed
+  // addresses. Store checksummed so every downstream consumer is safe.
+  const { getAddress } = await import('viem')
+  const walletChecksummed = getAddress(wallet)
   const { createPublicClient, http, parseAbi } = await import('viem')
   const { baseSepolia } = await import('viem/chains')
   const client = createPublicClient({ chain: baseSepolia, transport: http(process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com') })
@@ -479,16 +523,33 @@ campaigns.post('/:id/deposits', async (c) => {
   const expectedFrom = wallet.toLowerCase()
   const value = BigInt(shareWei)
   // Plain ETH transfer check: the tx itself must be from the claimed wallet,
-  // to the platform wallet, carrying exactly the share. (An ERC-20 deposit
-  // path would use Transfer logs; the demo deposits native ETH.)
+  // to the platform wallet, carrying exactly the share.
   const tx = await client.getTransaction({ hash: txHash as Hex }).catch(() => null)
-  const ethOk = !!tx && tx.from.toLowerCase() === expectedFrom && (tx.to?.toLowerCase() ?? '') === expectedTo && tx.value === value
-  const ok = ethOk
+  const plainOk = !!tx && tx.from.toLowerCase() === expectedFrom && (tx.to?.toLowerCase() ?? '') === expectedTo && tx.value === value
+  let ok = plainOk
+  // ERC-4337 smart-account fallback (MetaMask delegated accounts send via an
+  // execute() call: tx.to = the account contract, tx.value = 0 — the ETH moves
+  // INSIDE the call). Verify honestly via the platform wallet's balance delta
+  // across the tx's block: it must have received at least the share.
+  if (!ok && receipt) {
+    const [after, before] = await Promise.all([
+      client.getBalance({ address: PLATFORM_WALLET as Address, blockNumber: receipt.blockNumber }),
+      client.getBalance({ address: PLATFORM_WALLET as Address, blockNumber: receipt.blockNumber - 1n }),
+    ])
+    ok = after - before >= value
+  }
   if (!ok) {
     return c.json({ error: `Deposit tx does not carry ${Number(shareWei) / 1e18} ETH from ${wallet} to the platform wallet` }, 400)
   }
 
-  const updatedDeposits = { ...deposits, [company]: { wallet, txHash, wei: shareWei.toString(), confirmedAt: new Date().toISOString() } }
+  const updatedDeposits = { ...deposits, [company]: { wallet: walletChecksummed, txHash, wei: shareWei.toString(), confirmedAt: new Date().toISOString() } }
+  // Normalize any pre-existing side's wallet too (rows recorded before the
+  // checksum fix) so the launch path never sees mixed casing.
+  for (const side of ['A', 'B'] as const) {
+    if (updatedDeposits[side] && updatedDeposits[side].wallet !== walletChecksummed) {
+      try { updatedDeposits[side] = { ...updatedDeposits[side], wallet: getAddress(updatedDeposits[side].wallet) } } catch { /* leave as-is */ }
+    }
+  }
   const bothIn = Object.keys(updatedDeposits).length === 2
 
   if (!bothIn) {

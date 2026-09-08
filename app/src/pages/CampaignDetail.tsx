@@ -305,13 +305,19 @@ export default function CampaignDetail() {
     )
   }
 
-  const mechanics = campaign.mechanics as { rewardValues?: Record<string, string | number | boolean> } | undefined
+  const mechanics = campaign.mechanics as { rewardValues?: Record<string, string | number | boolean>; rewardBlocks?: Record<string, string> } | undefined
   const rv = mechanics?.rewardValues ?? {}
+  // The authoritative mechanic selector is rewardBlocks (the wizard's on/off
+  // toggles), NOT cashbackType — the wizard stores display strings like
+  // "Flat/Fixed"/"Percentage", so comparing cashbackType against 'flat'/'discount'
+  // always falls through and mislabels discount campaigns as % cashback.
+  const discountEnabled = mechanics?.rewardBlocks?.discount === 'enabled'
+  const cashbackEnabled = mechanics?.rewardBlocks?.cashback === 'enabled'
   const mechanicLabel =
-    rv.cashbackType === 'flat'
-      ? `Flat $${rv.cashbackFlat} cashback per purchase`
-      : rv.cashbackType === 'discount'
-        ? `$${rv.cashbackFlat} discount (proof-of-savings)`
+    discountEnabled
+      ? `$${rv.discountValue} discount on minimum spend (proof-of-savings)`
+      : cashbackEnabled && rv.cashbackType === 'Flat/Fixed'
+        ? `Flat $${rv.cashbackFlat} cashback per purchase`
         : `${rv.cashbackRate}% cashback in ${rv.cashbackToken ?? 'points'}`
 
   // Gas meter (demo model): gas is estimated from the REAL per-claim receipts
@@ -386,6 +392,14 @@ export default function CampaignDetail() {
       <div className="card">
         <div className="card-title">Campaign summary</div>
         <div className="card-desc">{mechanicLabel} · fee split {(campaign.fee_split_bps / 100).toFixed(0)}% to {campaign.company_a_name}</div>
+        {onchain && onchain.start * 1000 > Date.now() && (
+          <p className="field-hint" style={{ color: '#b45309' }}>
+            ⚠ Not started yet — this campaign opens {formatDateTime(onchain.start)}. Until then the escrow
+            rejects every DON-approved claim on-chain (liveness check runs on chain time, not the receipt's
+            purchase date), so test claims submitted before the start will pass consensus but mint nothing —
+            and silently. Submit test claims after {formatDateTime(onchain.start)}, or use an already-live campaign.
+          </p>
+        )}
         {onchain ? (
           <div>
             <div className="insight-row">
