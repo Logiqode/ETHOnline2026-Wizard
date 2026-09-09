@@ -118,7 +118,7 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
     state: 'enabled',
     fields: [
       { key: 'cap', label: 'Reward cap / user', type: 'number', placeholder: '100', min: 0 },
-      { key: 'capPeriod', label: 'Reset period', type: 'select', options: ['Lifetime', 'Year', 'Month', 'Week', 'Day'] },
+      { key: 'capPeriod', label: 'Reset period', type: 'select', options: ['Lifetime', 'Year', 'Month', 'Week', 'Day', 'Hour', 'Minute', 'Second'], disabledOptions: ['Hour', 'Minute', 'Second'], disabledHint: 'PRODUCTION-LIMITED: sub-day reset windows have no on-chain window math yet (windowStart anchors to day boundaries). Launches map them to a lifetime cap.' },
       { key: 'capPeriodCount', label: 'Every', type: 'number', placeholder: '1', min: 1 },
       { key: 'capResetBasis', label: 'Reset basis', type: 'select', options: ['Calendar', 'Rolling'], disabledOptions: ['Rolling'], disabledHint: 'PRODUCTION-LIMITED: rolling windows re-anchor per user and have no on-chain enforcement yet. Launches map Rolling to a lifetime cap.', hint: 'Calendar: fixed UTC boundaries — fully enforced on-chain.' },
       { key: 'capResetWeekday', label: 'Reset on', type: 'select', options: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], hint: 'Only for Calendar + Week — the weekday boundary (e.g. every 3 weeks on Wednesday).' },
@@ -148,10 +148,14 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
   {
     id: 'cumulative-spend',
     name: 'Cumulative spend period',
-    description: 'Aggregate spending over a time window.',
-    guide: 'Reward is based on cumulative spend, not per-transaction.',
+    description: 'After spending a total of n amount in the campaign, receive X (a badge, an event ticket, a lottery entry — reward shape is the campaign\'s choice).',
+    guide: 'Milestone reward based on cumulative spend across the campaign, not per-transaction.',
     state: 'production-limited',
-    fields: [{ key: 'period', label: 'Period (days)', type: 'number', placeholder: '30' }],
+    fields: [
+      { key: 'period', label: 'Period (days)', type: 'number', placeholder: '30' },
+      { key: 'threshold', label: 'Total spend (n)', type: 'number', placeholder: '200' },
+      { key: 'reward', label: 'Receives (X)', type: 'text', placeholder: 'badge / ticket / lottery entry' },
+    ],
   },
   {
     id: 'max-visits',
@@ -197,13 +201,31 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
     fields: [{ key: 'referralCount', label: 'Referrals', type: 'number', placeholder: '1' }],
   },
   {
-    id: 'reward-shapes',
-    name: 'Reward shapes',
-    description: 'Cashback / badge / redeemable badge / flat discount.',
-    guide: 'How the reward is delivered (points vs NFT badge).',
+    id: 'referred-by-friend',
+    name: 'Referred by a friend',
+    description: 'Join via a referral link/code from an existing customer.',
+    guide: 'The customer\'s first purchase counts only if they arrived through a referral — pairs with "Refer a friend" (referee-side of the same loop; attribution model TBD).',
     state: 'production-limited',
-    fields: [{ key: 'shape', label: 'Shape', type: 'select', options: ['Cashback', 'Badge', 'Redeemable badge', 'Flat discount'] }],
+    fields: [{ key: 'referralSource', label: 'Requires referral', type: 'select', options: ['Any referral', 'Specific campaign referral'] }],
   },
+  {
+    id: 'prior-campaign',
+    name: 'Participated in campaign n',
+    description: 'Customer must have participated in campaign n before.',
+    guide: 'Cross-campaign eligibility: rewards only for wallets with a claim history on a prior campaign.',
+    state: 'production-limited',
+    fields: [{ key: 'campaignRef', label: 'Prior campaign', type: 'text', placeholder: 'campaign id or name' }],
+  },
+  {
+    id: 'payment-method',
+    name: 'Payment method',
+    description: 'Customer must have paid using an eligible payment method.',
+    guide: 'Restrict the reward to specific payment rails (e.g. Globex card, mobile wallet).',
+    state: 'production-limited',
+    fields: [{ key: 'methods', label: 'Eligible methods', type: 'text', placeholder: 'Globex card, QR wallet' }],
+  },
+  // 'reward-shapes' removed — redundant: reward shape is chosen in the dedicated
+  // Reward section (Reward type + cashback/discount mechanics blocks).
   {
     id: 'birth-month',
     name: 'Birth date',
@@ -211,6 +233,17 @@ export const CAMPAIGN_RULES: CampaignRule[] = [
     guide: 'Reward based on a customer attribute (birth month).',
     state: 'production-limited',
     fields: [{ key: 'month', label: 'Month', type: 'select', options: ['January','February','March','April','May','June','July','August','September','October','November','December'] }],
+  },
+  // Last rule addition — "Before Tax" computes the reward on the pre-tax amount
+  // (e.g. 10% cashback on $110 incl. 10% tax = $10.00, not $11.00). Needs the
+  // POS payload to carry a tax breakdown the demo doesn't collect.
+  {
+    id: 'before-tax',
+    name: 'Before Tax',
+    description: 'Compute the reward on the pre-tax amount, not the total paid.',
+    guide: 'The POS payload would need a tax breakdown (subtotal vs tax) so the reward is calculated on the subtotal only.',
+    state: 'production-limited',
+    fields: [{ key: 'taxMode', label: 'Tax handling', type: 'select', options: ['Pre-tax subtotal', 'Pre-tax + tip'] }],
   },
 ]
 

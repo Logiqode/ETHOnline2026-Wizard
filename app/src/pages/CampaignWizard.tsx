@@ -60,6 +60,14 @@ const DEFAULT_RULE_VALUES: Record<string, string | number> = {
   month: 'July',
 }
 
+// ─── Reward scenarios (PRODUCTION-LIMITED tab preview) ────────
+// One campaign, many scenario tabs — each tab envelopes the whole Campaign
+// Rewards + Rules configuration (e.g. tab 2: "Spend $40 → 15%"). On-chain this
+// needs a scenario table in CampaignTerms (per-scenario rules + rate, first-
+// match-wins). The demo launches ONE flat scenario, so "Scenario 1" is the live
+// tab and any added tab is a locked placeholder: visible, not configurable.
+
+
 // ─── Campaign Rewards (type + mechanics) ───────────────────────
 const DEFAULT_REWARD_TYPE: RewardType = 'monetary'
 const DEFAULT_REWARD_BLOCK_STATES: Record<string, 'enabled' | 'disabled'> = Object.fromEntries(
@@ -131,10 +139,35 @@ export default function CampaignWizard() {
   const [rewardValues, setRewardValues] = useState<Record<string, string | number | boolean>>(DEFAULT_REWARD_VALUES)
   const [redeemCapEnabled, setRedeemCapEnabled] = useState(true)
   const [launch, setLaunch] = useState(DEFAULT_LAUNCH)
+  // Scenario tabs: "Scenario 1" is live; added tabs are PRODUCTION-LIMITED
+  // locked placeholders (visible, not configurable — nothing extra launches).
+  const [scenarioTabs] = useState<{ name: string; locked: boolean }[]>([
+    { name: 'Scenario 1', locked: false },
+  ])
+  const [activeScenario, setActiveScenario] = useState(0)
   const [launched, setLaunched] = useState(false)
   const [launchResult, setLaunchResult] = useState<{ id: string; salt: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  // Partner invites (frontend model of the production identity layer): the
+  // counterparty for each side is pinned by email invite or platform org id —
+  // NOT by a raw fee address typed by hand. The deposit-side wallet is then
+  // whichever Privy wallet the invited company connects at the handshake, and
+  // the backend binds side ↔ company from its authenticated record. The demo
+  // still stores placeholder fee addresses (no identity layer exists), but the
+  // wizard now models the invite flow the production security guard needs.
+  type PartnerInvite = { method: 'email' | 'orgId'; value: string }
+  // PRODUCTION-LIMITED preview state: each side defaults to the org-id method
+  // and shows a view-only input when clicked — the invite/email flow needs the
+  // platform identity layer the demo deliberately lacks, so nothing here is
+  // actually submittable (launch falls back to the demo deposit path).
+  const [partnerInvites, setPartnerInvites] = useState<{ A: PartnerInvite; B: PartnerInvite }>({
+    A: { method: 'orgId', value: '' },
+    B: { method: 'orgId', value: '' },
+  })
+
+  const setPartnerInvite = (side: 'A' | 'B', patch: Partial<PartnerInvite>) =>
+    setPartnerInvites((p) => ({ ...p, [side]: { ...p[side], ...patch } }))
 
   const setLaunchField = <K extends keyof typeof DEFAULT_LAUNCH>(k: K, v: (typeof DEFAULT_LAUNCH)[K]) =>
     setLaunch((p) => ({ ...p, [k]: v }))
@@ -221,11 +254,14 @@ export default function CampaignWizard() {
       if (capPeriod === 'Lifetime') {
         rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (lifetime)` })
       } else {
+        // Sub-day periods (Hour/Minute/Second) have no on-chain window math —
+        // same launch mapping as Rolling: they encode as a LIFETIME cap.
+        const subDay = capPeriod === 'Hour' || capPeriod === 'Minute' || capPeriod === 'Second'
         const calendar = ruleValues.capResetBasis === 'Calendar'
         // On-chain truth: Rolling has no window math — the launch mapping
         // encodes it as LIFETIME. Say so instead of showing a fake period.
-        if (!calendar) {
-          rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (lifetime on-chain — rolling resets are PRODUCTION-LIMITED)` })
+        if (!calendar || subDay) {
+          rows.push({ label: 'Per-user cap', value: `${capUnit}${ruleValues.cap}${capSuffix} (lifetime on-chain — ${subDay ? 'sub-day' : 'rolling'} resets are PRODUCTION-LIMITED)` })
         } else {
           let periodLabel = `every ${capCount} ${String(capPeriod).toLowerCase()}${capCount > 1 ? 's' : ''}`
           const tz = timezoneAbbr(terms.timezone)
@@ -360,7 +396,23 @@ export default function CampaignWizard() {
                 )}
               </div>
             ))}
-            <button className="add-brand" disabled title="Coming soon">+ Add Another Company</button>
+            <button className="add-brand" disabled title="PRODUCTION LIMITED — n-participant campaigns need multi-company deposit handshakes (not in the demo)">+ Add Another Company</button>
+            {/* Single-company mode (PRODUCTION LIMITED preview): for companies that want to
+                run a campaign on their own — one wallet is both POS and reward side, no
+                partner invite, no split — using the platform's settlement service instead of
+                wiring their own backend. The demo's handshake/factory assume two parties. */}
+            <div style={{ marginTop: 10, padding: '8px 12px', background: '#f2f3f5', border: '1px dashed var(--border-standard)', borderRadius: 6 }}>
+              <label className="field-label" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+                <input type="checkbox" disabled title="PRODUCTION LIMITED — single-company campaigns need a self-serve deposit path (not in the demo)" />
+                Single-company campaign (no partner)
+              </label>
+              <span className="field-hint" style={{ display: 'block', marginTop: 4 }}>
+                PRODUCTION LIMITED — one company plays both roles (earns and redeems on the same escrow), funds the
+                whole operating deposit itself, and uses the platform's hosted settlement service instead of wiring
+                its own backend to the workflow. Requires a self-serve deposit path and single-party handshake — not
+                available in the demo, where launches assume a two-party deposit handshake.
+              </span>
+            </div>
           </div>
 
           <div className="field" style={{ marginTop: 12 }}>
@@ -447,12 +499,52 @@ export default function CampaignWizard() {
             </div>
           </div>
           <div className="field">
-            <label className="field-label">Company A fee address</label>
-            <input className="input mono" value={launch.companyAFeeAddress} onChange={(e) => setLaunchField('companyAFeeAddress', e.target.value)} placeholder="0x…" />
-          </div>
-          <div className="field">
-            <label className="field-label">Company B fee address</label>
-            <input className="input mono" value={launch.companyBFeeAddress} onChange={(e) => setLaunchField('companyBFeeAddress', e.target.value)} placeholder="0x…" />
+            <label className="field-label">Partner companies <span className="field-hint" style={{ display: 'inline' }}>(production-limited — click a side to preview its invite flow: email or organization id. The invited company connects its own Privy wallet at the deposit handshake; wallets are never typed by hand here. Inputs are view-only until the platform identity layer exists.)</span></label>
+            {(['A', 'B'] as const).map((side) => {
+              const inv = partnerInvites[side]
+              const sideName = description.participants.find((p) => p.role === (side === 'A' ? 'pos' : 'reward'))?.name || (side === 'A' ? 'Company A' : 'Company B')
+              return (
+                <div key={side} className="grid-2" style={{ marginTop: side === 'A' ? 8 : 10, alignItems: 'end' }}>
+                  <div className="field" style={{ marginBottom: 0 }}>
+                    <label className="field-label">{sideName} ({side})</label>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <select
+                        className="select"
+                        style={{ width: 120 }}
+                        value={inv.method}
+                        onChange={(e) => setPartnerInvite(side, { method: e.target.value as PartnerInvite['method'] })}
+                        title="PRODUCTION LIMITED — the invite flow itself requires the platform identity layer (not in the demo); switching methods is a preview only"
+                      >
+                        <option value="email">By email</option>
+                        <option value="orgId">By org id</option>
+                      </select>
+                      <input
+                        className="input"
+                        style={{ flex: 1, background: '#f2f3f5', color: 'var(--text-secondary)', cursor: 'not-allowed' }}
+                        value={inv.value}
+                        placeholder={inv.method === 'email' ? 'partner@company.com' : 'org_…'}
+                        disabled
+                        readOnly
+                        title="PRODUCTION LIMITED — requires the platform identity layer (not in the demo)"
+                      />
+                    </div>
+                    {inv.method === 'email' && (
+                      <span className="field-hint">
+                        Invite email would be sent — {sideName} opens the link, creates its platform account, and the invite
+                        <strong> automatically converts to the new company's orgId</strong> on registration. From then on it's
+                        indistinguishable from an orgId link: {sideName} connects its wallet at the deposit handshake.
+                      </span>
+                    )}
+                    {inv.method === 'orgId' && (
+                      <span className="field-hint">Would link a registered organization — {sideName} connects its wallet at the deposit handshake.</span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+            <span className="field-hint" style={{ display: 'block', marginTop: 8 }}>
+              Why this replaces fee addresses: whoever deposits first would otherwise claim a side's fee slot (deposit hijack) — pinning each side to an invited, authenticated company means the deposit wallet is proven at the handshake, not typed here. Fee addresses derive from the connected wallets at launch. <strong>Production-limited:</strong> the invite/email flow needs the platform identity layer, which the demo deliberately lacks — the fields are previews only, and launching falls back to the demo deposit path.
+            </span>
           </div>
         </div>
 
@@ -516,6 +608,42 @@ export default function CampaignWizard() {
           </div>
         </div>
       </div>
+
+      {/* ── Scenario tabs (PRODUCTION-LIMITED) wrapping Rewards + Rules ── */}
+      {/* Scenario 1 is the live default; "+ Add scenario" opens locked placeholder
+          tabs — in production each tab would carry its own Rewards + Rules config
+          (e.g. tab 2: "Spend $40 → 15%"), evaluated first-match-wins on-chain. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+        {scenarioTabs.map((tab, i) => {
+          const active = activeScenario === i
+          return (
+            <button
+              key={i}
+              className={`btn ${active ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setActiveScenario(i)}
+              style={{ padding: '6px 14px', fontSize: 13 }}
+              title={tab.locked ? 'PRODUCTION-LIMITED: additional scenarios need a scenario table in the campaign terms (first-match-wins on-chain) — not available in the demo. Only Scenario 1 launches.' : 'Live scenario — this is what launches'}
+            >
+              {tab.name}{tab.locked ? ' 🔒' : ''}
+            </button>
+          )
+        })}
+        <button
+          className="btn btn-ghost"
+          disabled
+          title="PRODUCTION-LIMITED: adding scenarios requires a scenario table in the campaign terms (first-match-wins on-chain) — not available in the demo."
+          style={{ padding: '6px 14px', fontSize: 13, borderStyle: 'dashed', opacity: 0.55, cursor: 'not-allowed' }}
+        >
+          + Add scenario
+        </button>
+      </div>
+      {activeScenario !== 0 && (
+        <div className="launch-pending" style={{ marginBottom: 12 }} role="status">
+          <strong>{scenarioTabs[activeScenario]?.name} is a PRODUCTION-LIMITED placeholder</strong> — only Scenario 1 is
+          live and launches. In production, each scenario would carry its own Rewards + Rules configuration here
+          (e.g. "Spend at least $40 → 15% cashback"), and a purchase picks the highest scenario it qualifies for.
+        </div>
+      )}
 
       {/* ── Campaign Rewards ── */}
       <div className="card" style={{ marginBottom: 16 }}>
