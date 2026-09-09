@@ -22,6 +22,7 @@ const escrowAbi = parseAbi([
 ])
 
 const CLAIM_EVENT = parseAbiItem('event Claim(bytes32 indexed nullifier, address indexed recipient, uint256 points, uint256 amountSpent)')
+const REDEEM_EVENT = parseAbiItem('event Redeem(address indexed recipient, uint256 amount)')
 
 export const DEMO_USER_ANCHOR = '0xAAaA000000000000000000000000000000000001' as Address
 
@@ -63,6 +64,7 @@ export interface EscrowState {
   platformFeeAccount: Address
   platformFeesAccrued: string // raw 18-dec reward units as string
   participants: Participant[]
+  redeemCount: number // Redeem events observed (each is a relay-paid on-chain write)
   // True when the Claim-event scan had to fall back to a narrower window
   // (public RPC range limits) — the list may then miss very old claims.
   participantsPartial: boolean
@@ -97,6 +99,9 @@ export async function loadEscrowState(escrow: Address): Promise<EscrowState> {
   const fromBlock = estFrom > 0n ? (estFrom < head - MAX_RANGE ? head - MAX_RANGE : estFrom) : (head > MAX_RANGE ? head - MAX_RANGE : 0n)
   const participantsPartial = fromBlock > estFrom || estFrom < 0n
   const claimLogs = await client.getLogs({ address: escrow, event: CLAIM_EVENT, fromBlock, toBlock: 'latest' })
+  // Redeem events (each a relay-paid on-chain write, counted into the gas
+  // meter alongside claims). Same scan window, same partial-scan caveat.
+  const redeemLogs = await client.getLogs({ address: escrow, event: REDEEM_EVENT, fromBlock, toBlock: 'latest' })
 
   // Unique recipients in first-seen order; the ledger read is the source of
   // truth for balances (each claim has a unique per-purchase nullifier, so
@@ -165,6 +170,7 @@ export async function loadEscrowState(escrow: Address): Promise<EscrowState> {
     platformFeeAccount: platformFeeAccount,
     platformFeesAccrued: feesAccrued.toString(),
     participants,
+    redeemCount: redeemLogs.length,
     participantsPartial,
   }
 }

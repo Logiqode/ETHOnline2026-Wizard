@@ -119,13 +119,26 @@ export const SEED_TEST_PAYLOADS: Record<number, SeedTestPayload[]> = {
         campaignId: 1,
         userAnchor: '0xAAaA000000000000000000000000000000000003',
         merchantId: 'burgera',
-        amountSpent: 980,
+        amountSpent: 50,
         timestamp: 1789000000,
-        earnedInWindow: 2,
+        earnedInWindow: 0,
         items: ['family-meal'],
       },
       description:
-        'CAP EDGE — $980 purchase would earn 98 Bpoints raw, but earnedInWindow=2 leaves only 98 of the $100 cap → clamped to exactly 98. Tests the cap clamp in the enclave.',
+        'CAP CLAMP step 1 — $50 purchase → 5 Bpoints, all against the $100 per-user cap (fresh wallet …0003, earned 0 → uncapped pass). Run this FIRST to build up earnedInWindow=5 on the escrow ledger.',
+    },
+    {
+      payload: {
+        campaignId: 1,
+        userAnchor: '0xAAaA000000000000000000000000000000000003',
+        merchantId: 'burgera',
+        amountSpent: 980,
+        timestamp: 1789000001,
+        earnedInWindow: 5,
+        items: ['family-meal'],
+      },
+      description:
+        'CAP CLAMP step 2 — $980 purchase would earn 98 raw, but the wallet now has 5 earned (from step 1) → clamped to 95. Both the enclave and the escrow clamp against the real ledger: the mint is 95, not 98. Run AFTER step 1.',
     },
   ],
   2: [

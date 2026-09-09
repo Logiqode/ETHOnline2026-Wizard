@@ -49,6 +49,7 @@ interface EscrowState {
   platformFeeBps: number
   platformFeesAccrued: string
   participants: Participant[]
+  redeemCount: number
   participantsPartial: boolean
 }
 
@@ -60,6 +61,7 @@ interface Participant {
   claims: number
   amountSpentUsd: number
   lastClaimBlock: number
+  redeemCount?: number
 }
 
 interface TestPayloadInfo {
@@ -159,6 +161,11 @@ export default function CampaignDetail() {
   const [onchainError, setOnchainError] = useState<string | null>(null)
   const [testPayloads, setTestPayloads] = useState<TestPayloadInfo[]>([])
   const [openPayload, setOpenPayload] = useState<number | null>(null) // which card's JSON is expanded
+  // Per-payload overrides for the two nullifier-affecting fields: re-running a
+  // hardcoded payload collides on the nullifier (f(master, campaignId, anchor,
+  // timestamp)), so a rerun needs a fresh timestamp (and/or anchor) to mint.
+  // Everything else stays curated — the point of a test payload.
+  const [payloadOverrides, setPayloadOverrides] = useState<Record<number, { userAnchor?: string; timestamp?: string }>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -251,7 +258,15 @@ export default function CampaignDetail() {
     try {
       let body: Record<string, unknown>
       if (kind === 'test' && payloadIndex !== undefined && testPayloads[payloadIndex]) {
-        body = { ...testPayloads[payloadIndex].payload }
+        const base = testPayloads[payloadIndex].payload
+        const ov = payloadOverrides[payloadIndex] ?? {}
+        body = {
+          ...base,
+          // Nullifier-affecting overrides (anchor/timestamp): a rerun collides
+          // with the recorded nullifier unless at least one of these changes.
+          ...(ov.userAnchor?.trim() ? { userAnchor: ov.userAnchor.trim() } : {}),
+          ...(ov.timestamp ? { timestamp: Math.floor(new Date(ov.timestamp).getTime() / 1000) || base.timestamp } : {}),
+        }
       } else {
         // Manual: date → unix timestamp (empty = now); earnedInWindow auto =
         // the anchor's LIFETIME earned (the honest on-chain value — the seeded
@@ -377,12 +392,17 @@ export default function CampaignDetail() {
   // 0.0000016 ETH per claim). Rounded to 4 decimals the total reads 0.0000 —
   // Base Sepolia gas is genuinely that cheap. Real per-campaign accounting is
   // the ERC-4337 paymaster roadmap item.
+  // Redeems are ALSO on-chain writes the platform relay pays for (~59k gas,
+  // no DON consensus) — they draw on the same operating-fee balance, so the
+  // meter counts claims + redeems together (both measured, one balance).
   const CLAIM_GAS = 268_000
+  const REDEEM_GAS = 59_000
   const GWEI = 0.006
   const DEPOSIT_ETH = Number(campaign.operatingDepositWei) / WEI
   const claimsFunded = Math.floor((DEPOSIT_ETH * 1e18) / (CLAIM_GAS * GWEI * 1e9))
   const claimCount = onchain?.participants.reduce((n, p) => n + p.claims, 0) ?? 0
-  const gasUsedEth = claimCount * CLAIM_GAS * GWEI * 1e9 / 1e18
+  const redeemCount = onchain?.redeemCount ?? 0
+  const gasUsedEth = (claimCount * CLAIM_GAS + redeemCount * REDEEM_GAS) * GWEI * 1e9 / 1e18
   const totalGasUsed = gasUsedEth // total campaign spend (balance drawdown = usage)
 
   // Operating-fee balances per company (mirror of the factory's _recordDeposit:
@@ -564,7 +584,7 @@ export default function CampaignDetail() {
         <div className="card">
           <div className="card-title">Operating fees</div>
           <div className="card-desc">
-            {claimCount} claim{claimCount === 1 ? '' : 's'} through the workflow — gas from the real per-claim receipts (~268k gas @ ~0.006 gwei on Base Sepolia; per-campaign metering is the paymaster roadmap item).
+            {claimCount} claim{claimCount === 1 ? '' : 's'}{redeemCount > 0 ? ` + ${redeemCount} redeem${redeemCount === 1 ? '' : 's'}` : ''} through the workflow — gas from the real per-claim receipts (~268k gas per claim, ~59k per redeem, @ ~0.006 gwei on Base Sepolia; per-campaign metering is the paymaster roadmap item).
           </div>
           <div className="insight-row">
             <span className="insight-label">Workflow gas used</span>
@@ -655,9 +675,38 @@ export default function CampaignDetail() {
                     </button>
                   </div>
                   {openPayload === i && (
-                    <pre className="mono" style={{ fontSize: 12, background: '#f7f8f8', padding: 10, borderRadius: 6, overflowX: 'auto', marginTop: 8 }}>
-                      {JSON.stringify(tp.payload, null, 2)}
-                    </pre>
+                    <>
+                      <div className="grid-2" style={{ marginTop: 8 }}>
+                        <div className="field">
+                          <label className="field-label">userAnchor <span className="field-hint" style={{ display: 'inline' }}>(nullifier input — rerun with a fresh one to avoid a replay reject)</span></label>
+                          <input
+                            className="input mono"
+                            value={payloadOverrides[i]?.userAnchor ?? tp.payload.userAnchor}
+                            onChange={(e) => setPayloadOverrides((o) => ({ ...o, [i]: { ...o[i], userAnchor: e.target.value } }))}
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="field-label">timestamp <span className="field-hint" style={{ display: 'inline' }}>(nullifier input — rerun with a fresh one)</span></label>
+                          <input
+                            type="datetime-local"
+                            className="input"
+                            value={payloadOverrides[i]?.timestamp ?? new Date(tp.payload.timestamp * 1000).toISOString().slice(0, 16)}
+                            onChange={(e) => setPayloadOverrides((o) => ({ ...o, [i]: { ...o[i], timestamp: e.target.value } }))}
+                          />
+                        </div>
+                      </div>
+                      <pre className="mono" style={{ fontSize: 12, background: '#f7f8f8', padding: 10, borderRadius: 6, overflowX: 'auto', marginTop: 8 }}>
+                        {JSON.stringify(
+                          {
+                            ...tp.payload,
+                            ...(payloadOverrides[i]?.userAnchor?.trim() ? { userAnchor: payloadOverrides[i].userAnchor!.trim() } : {}),
+                            ...(payloadOverrides[i]?.timestamp ? { timestamp: Math.floor(new Date(payloadOverrides[i].timestamp!).getTime() / 1000) || tp.payload.timestamp } : {}),
+                          },
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </>
                   )}
                 </div>
               ))}
