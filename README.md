@@ -229,42 +229,44 @@ Simulation output shows the handler's `runtime.log` lines (debug only — remove
 
 ### Mock payloads
 
-Per-campaign POS payloads live in `wizard/test-payloads/` (one file per campaign × scenario). Campaign terms are **read on-chain at request time** from the deployed factory (`0xB770252B23066d0f0cf4006F740F5CAd6b83f5df` on Base Sepolia, recorded in `contracts/deployments/base-sepolia.json`) — new campaigns are picked up with zero workflow redeploys.
+Per-campaign POS payloads live in `wizard/test-payloads/` (one file per campaign × scenario). Campaign terms are **read on-chain at request time** from the deployed factory (see [Deployed contracts](#deployed-contracts-base-sepolia-chain-84532) below; recorded in `contracts/deployments/base-sepolia.json`) — new campaigns are picked up with zero workflow redeploys. All payload anchors use the reserved dummy address `0xAAaA000000000000000000000000000000000010` — safe to simulate without touching real wallet ledgers.
 
 ## Deployed contracts (Base Sepolia, chain 84532)
 
-Recorded in `contracts/deployments/base-sepolia.json` (rewritten by the deploy script). The demo is verified **end-to-end on-chain**: HTTP trigger → gateway ACCEPTED → DON consensus → forwarder delivers the report → escrow settles the claim (block [46501290](https://sepolia.basescan.org/tx/0x7903f511099c7c182dd017195dd35a45a0986b809c972d224c208e83ce65f9c2)).
+Recorded in `contracts/deployments/base-sepolia.json` (rewritten by the deploy script). The demo is verified **end-to-end on-chain**: HTTP trigger → gateway ACCEPTED → DON consensus → forwarder delivers the report → escrow settles the claim.
 
 **Core contracts**
 
 | Contract | Address |
 |---|---|
-| `CampaignFactory` (gen-6: `setCampaignRedeemer` passthrough) | [`0xB770252B23066d0f0cf4006F740F5CAd6b83f5df`](https://sepolia.basescan.org/address/0xB770252B23066d0f0cf4006F740F5CAd6b83f5df) |
-| `CampaignEscrow` (implementation; campaigns are EIP-1167 clones of it) | [`0xdEbB0c6c1eb693C1147d298478d0D63733F31a45`](https://sepolia.basescan.org/address/0xdEbB0c6c1eb693C1147d298478d0D63733F31a45) |
+| `CampaignFactory` (gen-6: `setCampaignRedeemer` passthrough) | [`0xB9cA1fA452fdacb3BE15b8927f52A65beF62bE60`](https://sepolia.basescan.org/address/0xB9cA1fA452fdacb3BE15b8927f52A65beF62bE60) |
+| `CampaignEscrow` (implementation; campaigns are EIP-1167 clones of it) | [`0xFffAeD763A411e89a4d4F4Ada641B7b3dC26a412`](https://sepolia.basescan.org/address/0xFffAeD763A411e89a4d4F4Ada641B7b3dC26a412) |
 | CRE Forwarder (Chainlink's production forwarder, not ours) | [`0xF8344CFd5c43616a4366C34E3EEE75af79a74482`](https://sepolia.basescan.org/address/0xF8344CFd5c43616a4366C34E3EEE75af79a74482) |
 
 **Demo campaigns (seeded via `contracts/script/SeedCampaigns.s.sol` on the current factory)**
 
 | # | Escrow clone | Reward (ERC-1155) |
 |---|---|---|
-| 1 | [`0x6D6eB14b3ADeA837080C4588026C3CbeA60F35cF`](https://sepolia.basescan.org/address/0x6D6eB14b3ADeA837080C4588026C3CbeA60F35cF) | [`0x72EDEca29435F008Db3d9b31BecBF3718832BdcA`](https://sepolia.basescan.org/address/0x72EDEca29435F008Db3d9b31BecBF3718832BdcA) |
-| 2 | [`0xaa173E7E9B9f8B3C9405D844Ed74300A0DFa924F`](https://sepolia.basescan.org/address/0xaa173E7E9B9f8B3C9405D844Ed74300A0DFa924F) | [`0xfA6B5D7BC8fC2B2276600a0c011068E3e9C8B20a`](https://sepolia.basescan.org/address/0xfA6B5D7BC8fC2B2276600a0c011068E3e9C8B20a) |
-| 3 | [`0x71a2f110461c7A5659936a26c7f6E6FfE2d122aA`](https://sepolia.basescan.org/address/0x71a2f110461c7A5659936a26c7f6E6FfE2d122aA) | [`0x90b1294E9c3D6a722AcB3C720B4f5AF5162fae93`](https://sepolia.basescan.org/address/0x90b1294E9c3D6a722AcB3C720B4f5AF5162fae93) |
+| 1 | [`0x7269B85C0510B999f3425810DBbbe6c042833E58`](https://sepolia.basescan.org/address/0x7269B85C0510B999f3425810DBbbe6c042833E58) | [`0x310Ec04D6f201b63457f790d39a0Ca33B57a120A`](https://sepolia.basescan.org/address/0x310Ec04D6f201b63457f790d39a0Ca33B57a120A) |
+| 2 | [`0x4d471aF887216de892bDa1Eaea1E4E135DFFAD5d`](https://sepolia.basescan.org/address/0x4d471aF887216de892bDa1Eaea1E4E135DFFAD5d) | [`0xa4Ac5A4fAD67470952B5C2d1349e2e8e92B41cD4`](https://sepolia.basescan.org/address/0xa4Ac5A4fAD67470952B5C2d1349e2e8e92B41cD4) |
+| 3 | [`0xfFbDd3122D280CCBd56314F5606279E33569589D`](https://sepolia.basescan.org/address/0xfFbDd3122D280CCBd56314F5606279E33569589D) | [`0xF35ab03Bc2a3592797fF6f507b3D5B505f6f3aB8`](https://sepolia.basescan.org/address/0xF35ab03Bc2a3592797fF6f507b3D5B505f6f3aB8) |
 
 **Key transactions**
 
 | What | Tx |
 |---|---|
-| Deploy `CampaignEscrow` implementation (gen-6) | [`0xa6f6de514d49450cc8904af69f75de76b9bc83ce378a200e5d7229b7bab53c8b`](https://sepolia.basescan.org/tx/0xa6f6de514d49450cc8904af69f75de76b9bc83ce378a200e5d7229b7bab53c8b) |
-| Deploy `CampaignFactory` (gen-6) | [`0x93db79c5ce3f969d8ce8cd484d8594d951e39e59c5aaf22e6f7ac4de259bb329`](https://sepolia.basescan.org/tx/0x93db79c5ce3f969d8ce8cd484d8594d951e39e59c5aaf22e6f7ac4de259bb329) |
-| Seed campaign 1 (gen-6, percent 10%) | [`0x4b80635f887bd6afed59c843d1a3f9745d5601f4f06a6cc7239983e9f576412a`](https://sepolia.basescan.org/tx/0x4b80635f887bd6afed59c843d1a3f9745d5601f4f06a6cc7239983e9f576412a) |
-| Seed campaign 2 (gen-6, flat $2) | [`0x0ae1eee5d307a2cce2f662c5de3959575c1b023717818e35aed61c3ebcc22c8b`](https://sepolia.basescan.org/tx/0x0ae1eee5d307a2cce2f662c5de3959575c1b023717818e35aed61c3ebcc22c8b) |
-| Seed campaign 3 (gen-6, discount $5) | [`0xaf1788f95e50af502f88b2ba1405a97801c67128665aaa7af6fb85507f5ca157`](https://sepolia.basescan.org/tx/0xaf1788f95e50af502f88b2ba1405a97801c67128665aaa7af6fb85507f5ca157) |
-| `setCampaignRedeemer` — relay authorized on campaigns 1 & 2 (gen-6 passthrough) | [`0x1222d898317c56696618dd8c69a6a94c3f5cc4579ca2d107da3d52ab9b9871b0`](https://sepolia.basescan.org/tx/0x1222d898317c56696618dd8c69a6a94c3f5cc4579ca2d107da3d52ab9b9871b0), [`0x20aa156d6f0d8bab855828e602cc92e8e791b08b4d142601cf16550593778194`](https://sepolia.basescan.org/tx/0x20aa156d6f0d8bab855828e602cc92e8e791b08b4d142601cf16550593778194) |
-| **End-to-end earn+redeem on gen-6** (DON report → claim + mint 2.0; then relay `redeemFor` 1.0) | mint `0x3644aae0`… — see [Earn/redeem verification](#earnredeem-verification-gen-6) below |
+| Deploy `CampaignEscrow` implementation (gen-6) | [`0x7a558d4b1de0fec49a2e553b2aa5d7499a1c33d8bfb9c8d3bf6cb421f41eb266`](https://sepolia.basescan.org/tx/0x7a558d4b1de0fec49a2e553b2aa5d7499a1c33d8bfb9c8d3bf6cb421f41eb266) |
+| Deploy `CampaignFactory` (gen-6) | [`0xb58ce1be7d3165601b1b324446e4fab028cccec0c4e1e22aae97afc3e0b56809`](https://sepolia.basescan.org/tx/0xb58ce1be7d3165601b1b324446e4fab028cccec0c4e1e22aae97afc3e0b56809) |
+| Seed campaign 1 (gen-6, percent 10%) | [`0x1ef0f696fe11abc96c9b40e6065b08d795912c65fb32397eb8894fb12c169763`](https://sepolia.basescan.org/tx/0x1ef0f696fe11abc96c9b40e6065b08d795912c65fb32397eb8894fb12c169763) |
+| Seed campaign 2 (gen-6, flat $2) | [`0x0f02fed8b430f752b84a6beec0e0f03c411436bf2fbd397f3f3bce1fab6191b8`](https://sepolia.basescan.org/tx/0x0f02fed8b430f752b84a6beec0e0f03c411436bf2fbd397f3f3bce1fab6191b8) |
+| Seed campaign 3 (gen-6, discount $5) | [`0xfe56f89d16c5762ca49399170776309431a391ae59df756425f64a24eb826391`](https://sepolia.basescan.org/tx/0xfe56f89d16c5762ca49399170776309431a391ae59df756425f64a24eb826391) |
+| `setCampaignRedeemer` — relay authorized on campaigns 1–3 (gen-6 passthrough) | [`0x61da1b5c0867dacf19b75deff136a999a8d726699e99ec38bbbd747ee23c90f1`](https://sepolia.basescan.org/tx/0x61da1b5c0867dacf19b75deff136a999a8d726699e99ec38bbbd747ee23c90f1), [`0xa8a2901c52f684f495f5ff9ee46dde3cd483af740bd5bad000a18e796af6c1d6`](https://sepolia.basescan.org/tx/0xa8a2901c52f684f495f5ff9ee46dde3cd483af740bd5bad000a18e796af6c1d6), [`0x917b55e89876e5e644af7ca2d760812de8f7f6132497388042665030b6478bb7`](https://sepolia.basescan.org/tx/0x917b55e89876e5e644af7ca2d760812de8f7f6132497388042665030b6478bb7) |
+| **End-to-end earn+redeem on gen-6** | see [Earn/redeem verification](#earnredeem-verification-gen-6) below |
 | (gen-4, superseded) End-to-end claim | [`0x7903f511099c7c182dd017195dd35a45a0986b809c972d224c208e83ce65f9c2`](https://sepolia.basescan.org/tx/0x7903f511099c7c182dd017195dd35a45a0986b809c972d224c208e83ce65f9c2) |
 
-**CRE workflow**: `wizard-staging`, workflow ID `00d9e14331b22726f39936f0bd5178bdc86db9cfa6f72d2361381c9261859c67` (gen-6: reads the gen-6 factory `0xB770…f5df`; on-chain per-tx cap; private registry, zone-a DON family, owner `0x8996097709d886abD468511BfB5A7279110e15d8`; nullifier includes the payload timestamp — see the privacy notes below). Fired via the signed-relay path (see `backend/scripts/trigger.ts`).
+**CRE workflow**: `wizard-staging`, workflow ID `004101c57d06614eab94bb1f82421fc626fcba60e975b7fe2cb706f052ddae72` (gen-6: reads the gen-6 factory `0xB9cA…bE60`; on-chain per-tx cap; private registry, zone-a DON family, owner `0x8996097709d886abD468511BfB5A7279110e15d8`; nullifier includes the payload timestamp — see the privacy notes below). Fired via the signed-relay path (see `backend/scripts/trigger.ts`).
+
+**Live deployment**: the app runs on Vercel — **[https://eth-online2026-wizard.vercel.app](https://eth-online2026-wizard.vercel.app/)** (frontend + API: `https://eth-online2026-wizard-backend.vercel.app`, Postgres: Neon). Same contracts/workflow as above; the campaigns list is verified live against the factory registry.
 
 ### Earn/redeem verification (gen-6)
 
