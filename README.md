@@ -454,3 +454,12 @@ The demo's signed-balance model extends to production with explicit credit limit
   - **Digital / Physical merchandise**: the reward-type buttons are clickable and the badge fields view-only, but the **Launch button disables** ("Launch unavailable") and the backend `/launch` route **rejects** any non-`monetary` reward type with a 400 — a badge campaign cannot silently launch with zero-value terms. The on-chain caps already support badge mechanics (flat value 1 + per-tx cap 1 = one badge per purchase, whole-number clamps); only the launch-path wiring is missing.
   - Custom day-of-month (Month windows) and custom month/day (Year windows): fixed anchors (1st / Jan-1) only.
 - **Payload flow: demo vs production.** In this demo the POS payload is submitted by the platform's own backend (the same service that hosts the wizard UI and Postgres) — a deliberate simplification so the whole stack runs locally. In **production the payload ingress is the POS company's backend calling the CRE workflow's HTTP trigger directly** (authenticated per-merchant); the platform operates the workflow + contracts, not the request path. This matters for the trust story: raw purchase data flows from the merchant to the enclave without transiting platform-operated infrastructure, and the enclave's verdict is the only thing the platform can observe. Per-campaign facts the enclave needs (min-spend, rate, caps, window) are read **on-chain from the factory at request time**; the per-user `earnedInWindow` is supplied by the caller in the demo and would be read from the escrow's on-chain ledger (or a merchant-signed accumulator) in production.
+
+---
+
+## About Me
+
+I'm an Indonesian fresh graduate, majored in Informatics Engineering (close to Computer Science) from Institut Teknologi Sepuluh Nopember. I'm on track to start working as a web2 engineer in Tokyo, Japan. I hold a JLPT N2 (CEFR B2) Japanese proficiency, and am very open to opportunities in web3 (remote or in Japan).
+
+- LinkedIn: [jeremyjamestp](https://www.linkedin.com/in/jeremyjamestp/)
+- Discord: `@logiqelza`
