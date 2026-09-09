@@ -2,8 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict Kv0kYUxdmzE5uSzIgtCqoSBDuJMS13t1JlO2bfuyHYGChBPKujC5ErnjYIB7aZ4
-
 -- Dumped from database version 16.14
 -- Dumped by pg_dump version 16.14
 
@@ -97,6 +95,3 @@ CREATE INDEX idx_campaigns_status ON public.campaigns USING btree (status);
 --
 -- PostgreSQL database dump complete
 --
-
-\unrestrict Kv0kYUxdmzE5uSzIgtCqoSBDuJMS13t1JlO2bfuyHYGChBPKujC5ErnjYIB7aZ4
-
