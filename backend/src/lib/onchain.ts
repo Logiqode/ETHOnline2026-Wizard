@@ -22,42 +22,35 @@ export const factoryAbi = parseAbi([
 
 export interface DeployedAddresses {
   factory: Address
-  escrowImplementation: Address
+  escrowImplementation?: Address
   deployer: Address
   chainId: number
 }
 
 export async function loadDeployment(): Promise<DeployedAddresses> {
-  // Resolved from this module's location up to the repo root; the JSON lives in
-  // contracts/deployments/. Bun exposes import.meta.dir; Node (Vercel runtime)
-  // does not — derive the dir from import.meta.url so both work.
-  // The file is packaged into the lambda via vercel.json includeFiles — which
-  // is RELATIVE TO THE PROJECT ROOT (backend/), so on Vercel the file lands at
-  // ../contracts/... relative to src/lib, but at ./contracts/... relative to
-  // the bundle root (/var/task). Probe both layouts.
+  // On Vercel (serverless), FACTORY_ADDRESS env var is the source of truth —
+  // repo files outside backend/ aren't packaged into the lambda. Locally (Bun),
+  // fall back to reading contracts/deployments/base-sepolia.json like before.
+  if (process.env.FACTORY_ADDRESS) {
+    return {
+      factory: process.env.FACTORY_ADDRESS as Address,
+      escrowImplementation: (process.env.ESCROW_IMPLEMENTATION ?? undefined) as Address | undefined,
+      deployer: (process.env.WORKFLOW_OWNER_ADDRESS ?? process.env.FACTORY_ADDRESS) as Address,
+      chainId: 84532,
+    }
+  }
+  // Local Bun: resolve from module location up to the repo root.
   const here = typeof import.meta.dir === 'string'
     ? import.meta.dir
     : dirname(fileURLToPath(import.meta.url))
-  const candidates = process.env.VERCEL
-    ? [
-        join(here, 'contracts', 'deployments', 'base-sepolia.json'), // Vercel: includeFiles copies to /var/task/contracts
-        join(here, '..', '..', '..', 'contracts', 'deployments', 'base-sepolia.json'), // local Bun: repo root
-      ]
-    : [join(here, '..', '..', '..', 'contracts', 'deployments', 'base-sepolia.json')]
-  for (const path of candidates) {
-    try {
-      const raw = JSON.parse(await readFile(path, 'utf8'))
-      return {
-        factory: raw.factory as Address,
-        escrowImplementation: raw.escrowImplementation as Address,
-        deployer: raw.deployer as Address,
-        chainId: raw.chainId,
-      }
-    } catch {
-      /* try next candidate */
-    }
+  const path = join(here, '..', '..', '..', 'contracts', 'deployments', 'base-sepolia.json')
+  const raw = JSON.parse(await readFile(path, 'utf8'))
+  return {
+    factory: raw.factory as Address,
+    escrowImplementation: raw.escrowImplementation as Address,
+    deployer: raw.deployer as Address,
+    chainId: raw.chainId,
   }
-  throw new Error(`base-sepolia.json not found (tried: ${candidates.join(', ')})`)
 }
 
 export interface TermsInput {
