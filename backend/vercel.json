@@ -4,10 +4,11 @@
     {
       "src": "api/index.ts",
       "use": "@vercel/node",
-      "config": { "maxDuration": 60 }
+      "config": { "maxDuration": 60, "includeFiles": "contracts/deployments/**" }
     }
   ],
   "routes": [
     { "src": "/(.*)", "dest": "/api/index.ts" }
   ]
 }
+

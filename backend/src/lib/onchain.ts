@@ -7,7 +7,8 @@ import { createPublicClient, createWalletClient, http, parseAbi, decodeEventLog,
 import { privateKeyToAccount } from 'viem/accounts'
 import { baseSepolia } from 'viem/chains'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com'
 
@@ -28,8 +29,13 @@ export interface DeployedAddresses {
 
 export async function loadDeployment(): Promise<DeployedAddresses> {
   // Resolved from this module's location (backend/src/lib) up to the repo root;
-  // the JSON lives in contracts/deployments/.
-  const path = join(import.meta.dir, '..', '..', '..', 'contracts', 'deployments', 'base-sepolia.json')
+  // the JSON lives in contracts/deployments/. Bun exposes import.meta.dir; Node
+  // (Vercel runtime) does not — derive the dir from import.meta.url so both work.
+  // The file is packaged into the lambda via vercel.json includeFiles.
+  const here = typeof import.meta.dir === 'string'
+    ? import.meta.dir
+    : dirname(fileURLToPath(import.meta.url))
+  const path = join(here, '..', '..', '..', 'contracts', 'deployments', 'base-sepolia.json')
   const raw = JSON.parse(await readFile(path, 'utf8'))
   return {
     factory: raw.factory as Address,
