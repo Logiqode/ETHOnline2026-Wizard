@@ -28,21 +28,36 @@ export interface DeployedAddresses {
 }
 
 export async function loadDeployment(): Promise<DeployedAddresses> {
-  // Resolved from this module's location (backend/src/lib) up to the repo root;
-  // the JSON lives in contracts/deployments/. Bun exposes import.meta.dir; Node
-  // (Vercel runtime) does not — derive the dir from import.meta.url so both work.
-  // The file is packaged into the lambda via vercel.json includeFiles.
+  // Resolved from this module's location up to the repo root; the JSON lives in
+  // contracts/deployments/. Bun exposes import.meta.dir; Node (Vercel runtime)
+  // does not — derive the dir from import.meta.url so both work.
+  // The file is packaged into the lambda via vercel.json includeFiles — which
+  // is RELATIVE TO THE PROJECT ROOT (backend/), so on Vercel the file lands at
+  // ../contracts/... relative to src/lib, but at ./contracts/... relative to
+  // the bundle root (/var/task). Probe both layouts.
   const here = typeof import.meta.dir === 'string'
     ? import.meta.dir
     : dirname(fileURLToPath(import.meta.url))
-  const path = join(here, '..', '..', '..', 'contracts', 'deployments', 'base-sepolia.json')
-  const raw = JSON.parse(await readFile(path, 'utf8'))
-  return {
-    factory: raw.factory as Address,
-    escrowImplementation: raw.escrowImplementation as Address,
-    deployer: raw.deployer as Address,
-    chainId: raw.chainId,
+  const candidates = process.env.VERCEL
+    ? [
+        join(here, 'contracts', 'deployments', 'base-sepolia.json'), // Vercel: includeFiles copies to /var/task/contracts
+        join(here, '..', '..', '..', 'contracts', 'deployments', 'base-sepolia.json'), // local Bun: repo root
+      ]
+    : [join(here, '..', '..', '..', 'contracts', 'deployments', 'base-sepolia.json')]
+  for (const path of candidates) {
+    try {
+      const raw = JSON.parse(await readFile(path, 'utf8'))
+      return {
+        factory: raw.factory as Address,
+        escrowImplementation: raw.escrowImplementation as Address,
+        deployer: raw.deployer as Address,
+        chainId: raw.chainId,
+      }
+    } catch {
+      /* try next candidate */
+    }
   }
+  throw new Error(`base-sepolia.json not found (tried: ${candidates.join(', ')})`)
 }
 
 export interface TermsInput {
