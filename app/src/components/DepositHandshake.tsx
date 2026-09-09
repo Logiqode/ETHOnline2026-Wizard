@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react'
 import { usePrivy, useWallets } from '@privy-io/react-auth'
 
-const API = 'http://localhost:4000'
+import { API } from '../lib/api'
 
 interface HandshakeState {
   shares: { A: string; B: string }

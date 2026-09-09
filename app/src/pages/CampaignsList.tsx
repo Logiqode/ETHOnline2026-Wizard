@@ -20,7 +20,7 @@ interface Campaign {
   depositDeadline: string | null
 }
 
-const API = 'http://localhost:4000'
+import { API } from '../lib/api'
 
 export default function CampaignsList() {
   const [live, setLive] = useState<Campaign[]>([])

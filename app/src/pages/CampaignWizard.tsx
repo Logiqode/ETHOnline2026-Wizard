@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { API } from '../lib/api'
 import {
   BRANDS,
   BRAND_ROLES,
@@ -331,7 +332,7 @@ export default function CampaignWizard() {
         companyAName: description.participants.find((p) => p.role === 'pos')?.name ?? '',
         companyBName: description.participants.find((p) => p.role === 'reward')?.name ?? '',
       }
-      const saveRes = await fetch('http://localhost:4000/api/campaigns', {
+      const saveRes = await fetch(`${API}/api/campaigns`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -342,7 +343,7 @@ export default function CampaignWizard() {
       }
       const saved = await saveRes.json()
       if (bypass) {
-        const launchRes = await fetch(`http://localhost:4000/api/campaigns/${saved.id}/launch`, { method: 'POST' })
+        const launchRes = await fetch(`${API}/api/campaigns/${saved.id}/launch`, { method: 'POST' })
         if (!launchRes.ok) {
           const err = await launchRes.json().catch(() => ({ error: `HTTP ${launchRes.status}` }))
           throw new Error(err.error || `HTTP ${launchRes.status}`)
@@ -351,7 +352,7 @@ export default function CampaignWizard() {
         setLaunchResult({ id: String(launchedCampaign.id), salt: launchedCampaign.salt })
         setLaunched(true)
       } else {
-        const initRes = await fetch(`http://localhost:4000/api/campaigns/${saved.id}/deposits/initiate`, { method: 'POST' })
+        const initRes = await fetch(`${API}/api/campaigns/${saved.id}/deposits/initiate`, { method: 'POST' })
         if (!initRes.ok) {
           const err = await initRes.json().catch(() => ({ error: `HTTP ${initRes.status}` }))
           throw new Error(err.error || `HTTP ${initRes.status}`)

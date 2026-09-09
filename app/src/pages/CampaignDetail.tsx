@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { usePrivy, useWallets } from '@privy-io/react-auth'
 import DepositHandshake from '../components/DepositHandshake'
 
-const API = 'http://localhost:4000'
+import { API } from '../lib/api'
 
 interface Campaign {
   id: string
