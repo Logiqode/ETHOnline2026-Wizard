@@ -1,8 +1,14 @@
 # Wizard
 
-**Confidential cross-brand campaign factory** — B2B loyalty/cross-brand campaigns where two enterprises run "spend at Brand A → earn rewards redeemable at Brand B" without sharing raw customer data or building bilateral integrations.
+**Confidential cross-brand campaign factory** — B2B loyalty/cross-brand campaigns where enterprises run "spend at Brand A → earn rewards redeemable at Brand B" without sharing raw customer data or building bilateral integrations.
 
 > Scaffolded from the `hello-confidential-workflows` starter kit ([smartcontractkit/cre-templates](https://github.com/smartcontractkit/cre-templates/tree/main/starter-templates/hello-confidential-workflows), MIT). The CRE confidential workflow provides the confidential eligibility verification; settlement lives on Base Sepolia.
+
+## Problem
+
+Building custom APIs takes time and money in upfront development costs — this platform turns CapEx into OpEx. Companies also face privacy issues with sharing databases, and manual reconciliation between partners is slow and error-prone.
+
+Current blockchain infrastructure doesn't help: public chains are a non-starter for companies, since transaction data could contain personal information that can't sit on a public ledger; private chains, meanwhile, require infrastructure most companies don't have — such as running their own nodes.
 
 ## Stack
 
