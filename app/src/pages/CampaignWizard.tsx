@@ -277,7 +277,12 @@ export default function CampaignWizard() {
     rows.push({ label: 'Window', value: terms.noEndDate ? `from ${terms.start} · ${terms.timezone} · no end date` : `${terms.start} → ${terms.end} · ${terms.timezone}` })
     const rateBps = rewardBlockStates.cashback === 'enabled' ? Math.round(Number(rewardValues.cashbackRate || 0) * 100) : 0
     // Terms only carry a cap when its mechanic block is actually enabled.
-    const perTxCap = rewardBlockStates.cashback === 'enabled' && rewardValues.cashbackPerTxCapEnabled ? rewardValues.cashbackPerTxCap : null
+    // Flat cashback: the cap mirrors the flat value (the input is read-only) —
+    // show the mirror, never the stale stored value, so summary and on-chain
+    // terms agree (backend launch mapping does the same mirror).
+    const perTxCap = rewardBlockStates.cashback === 'enabled' && rewardValues.cashbackPerTxCapEnabled
+      ? (rewardValues.cashbackType === 'Flat/Fixed' ? rewardValues.cashbackFlat : rewardValues.cashbackPerTxCap)
+      : null
     const discountPerTxCap = rewardBlockStates.discount === 'enabled' && rewardValues.discountPerTxCapEnabled
       ? (rewardValues.discountType === 'Percentage (%)' ? rewardValues.discountPerTxCap : rewardValues.discountValue)
       : null

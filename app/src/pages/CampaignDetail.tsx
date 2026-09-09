@@ -20,6 +20,7 @@ interface Campaign {
   mechanics: Record<string, unknown>
   terms: Record<string, unknown>
   depositDeadline: string | null
+  deposits?: Record<string, { wallet: string; txHash: string; wei: string; confirmedAt?: string }>
 }
 
 interface EscrowState {
@@ -184,10 +185,11 @@ export default function CampaignDetail() {
   const [result, setResult] = useState<TriggerResult | null>(null)
   const [redeemForm, setRedeemForm] = useState({ user: '0xAAaA000000000000000000000000000000000001', amount: '1' })
   const [redeemResult, setRedeemResult] = useState<RedeemResult | null>(null)
+  const [deposits, setDeposits] = useState<Campaign['deposits']>(undefined)
   // Wallet-signed redeem: Privy session (same login family as the deposit
   // handshake — embedded wallet or email-linked). The signer must be Company
   // B's deposited wallet, checked client-side for UX and enforced server-side.
-  const { ready: privyReady, authenticated, login, user: privyUser } = usePrivy()
+  const { ready: privyReady, authenticated, login, logout, user: privyUser } = usePrivy()
   const { wallets } = useWallets()
   const privyWallet = wallets.find((w) => w.walletClientType === 'privy')
   const linkedExternal = authenticated && privyUser?.wallet?.address
@@ -207,6 +209,7 @@ export default function CampaignDetail() {
       if (!res.ok) throw new Error(res.status === 404 ? 'Campaign not found' : `HTTP ${res.status}`)
       const data = (await res.json()) as Campaign
       setCampaign(data)
+      setDeposits(data.deposits)
 
       if (data.status === 'launched' && data.escrow_address) {
         const [ocRes, tpRes] = await Promise.all([
@@ -823,6 +826,21 @@ export default function CampaignDetail() {
             spendable balance; the lifetime ledger is preserved. Wallet-signed redeem is restricted to the
             Reward company's own Privy wallet; the platform-relay path bypasses that check for demos/support.
           </div>
+          {/* Wallet guard: the Reward company's deposit wallet is the ONLY signer
+              the backend accepts — show the expected wallet and warn BEFORE the
+              user signs with the wrong one (e.g. a silent Privy email wallet). */}
+          {deposits?.B?.wallet && (
+            <p className="field-hint" style={{ marginTop: 6 }}>
+              Expected signer (Reward company's deposit wallet): <span className="mono">{short(deposits.B.wallet)}</span>
+              {authenticated && redeemWalletAddress && redeemWalletAddress.toLowerCase() !== deposits.B.wallet.toLowerCase() && (
+                <span style={{ color: '#b3261e', display: 'block', marginTop: 4 }}>
+                  ⚠️ Connected wallet <span className="mono">{short(redeemWalletAddress)}</span> will be REJECTED — it is not the
+                  Reward company's deposit wallet. {redeemWallet?.walletClientType === 'privy' ? 'This is your Privy embedded (email login) wallet — sign out below and connect the deposit wallet instead.' : 'Disconnect and connect the Reward company\'s deposit wallet.'}
+                  {' '}<button className="linklike" onClick={() => void logout()}>Log out / switch wallet</button>
+                </span>
+              )}
+            </p>
+          )}
           <div className="grid-2" style={{ marginTop: 8 }}>
             <div className="field">
               <label className="field-label">Customer wallet</label>
@@ -864,6 +882,28 @@ export default function CampaignDetail() {
               recovered signer matches the Reward company's deposit wallet.
             </p>
           )}
+          <p className="field-hint" style={{ opacity: 0.7, marginTop: 6 }}>
+            DEBUG:{' '}
+            <button
+              className="linklike"
+              title="Nukes every Privy storage key in this browser (localStorage, sessionStorage, cookies) and reloads — use when the Privy session is stuck and logout didn't clear it (same debug tool as the deposit handshake)"
+              onClick={() => {
+                for (const store of [window.localStorage, window.sessionStorage]) {
+                  for (const key of Object.keys(store)) {
+                    if (/privy|privy-io/i.test(key)) store.removeItem(key)
+                  }
+                }
+                for (const cookie of document.cookie.split(';')) {
+                  const name = cookie.split('=')[0]?.trim()
+                  if (name && /privy/i.test(name)) document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`
+                }
+                window.location.reload()
+              }}
+            >
+              force-clear Privy session
+            </button>{' '}
+            — removes all Privy tokens/storage for this browser and reloads the page (debug only; a fresh login will provision a new embedded wallet).
+          </p>
           {redeemResult && (
             <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: redeemResult.ok ? '#e3f2e9' : '#fdeceb' }}>
               {redeemResult.ok ? (

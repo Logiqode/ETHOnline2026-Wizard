@@ -184,10 +184,13 @@ export default function DepositHandshake({ campaignId, feeSplitBps, companyAName
         Each company connects a Privy wallet and deposits its share of the {((feeSplitBps / 100)).toFixed(0)}/{(100 - feeSplitBps / 100).toFixed(0)} operating split.
         The campaign deploys on-chain once both deposits confirm
         {termsStart ? ` — deadline is the campaign start (${String(termsStart).slice(0, 10)}), or now + 4h if that passed` : ' — deadline is now + 4h'}.
+        <strong> Sides are fixed by role, not by the order brands were entered:</strong> (A) is always the POS-side
+        company, (B) is always the Reward/redeem-side company — whichever position each brand had in the wizard.
+        The Reward company's deposit wallet is the one that signs redeems after launch.
       </div>
 
       <div className="insight-row">
-        <span className="insight-label">{companyAName} (A)</span>
+        <span className="insight-label">{companyAName} (A) — POS side</span>
         <span className="insight-value">
           {deposited.A ? `deposited ${short(deposited.A)}` : `${shareA} ETH — deposit A`}
           {deposited.A ? null : (
@@ -209,7 +212,7 @@ export default function DepositHandshake({ campaignId, feeSplitBps, companyAName
         </span>
       </div>
       <div className="insight-row">
-        <span className="insight-label">{companyBName} (B)</span>
+        <span className="insight-label">{companyBName} (B) — Reward/redeem side</span>
         <span className="insight-value">
           {deposited.B ? `deposited ${short(deposited.B)}` : `${shareB} ETH — deposit B`}
           {deposited.B ? null : (

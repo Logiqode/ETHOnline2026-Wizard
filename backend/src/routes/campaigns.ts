@@ -290,11 +290,18 @@ async function launchOnChainAndRecord(
   // Per-transaction cap (now on-chain in Rules). For percent cashback the UI
   // value is in reward units ($); for percent discounts it's a % of spend —
   // same semantics the wizard displays. Off when the toggle is off.
+  // Flat cashback: the cap is meaningless above the flat value (payout can
+  // never exceed it) — mirror the flat value, exactly like the wizard's
+  // summary does, so a stale wizard default (e.g. $50) can't silently slash
+  // a flat cashback larger than the cap.
   const cashbackPerTxCapOn = redeemable && rv.cashbackPerTxCapEnabled === true
   const discountPerTxCapOn = !redeemable && rv.discountPerTxCapEnabled === true
   const perTxCapEnabled = cashbackPerTxCapOn || discountPerTxCapOn
+  const flatCashbackMirror = flatEnabled ? usdToWei(Number(rv.cashbackFlat ?? 0)) : null
   const perTxCapWei = perTxCapEnabled
-    ? usdToWei(Number((cashbackPerTxCapOn ? rv.cashbackPerTxCap : rv.discountPerTxCap) ?? 0))
+    ? (cashbackPerTxCapOn && flatCashbackMirror !== null
+        ? flatCashbackMirror
+        : usdToWei(Number((cashbackPerTxCapOn ? rv.cashbackPerTxCap : rv.discountPerTxCap) ?? 0)))
     : 0n
 
   // ── Cap-reset window mapping (gen-5: enforced on-chain, CampaignRulesLib) ─
@@ -362,6 +369,31 @@ async function launchOnChainAndRecord(
       companyB: row.company_b as Address,
       feeSplitBps: row.fee_split_bps,
     })
+    // Grant the platform relay (CRE key) explicit redeemer rights on the fresh
+    // escrow. _onlyRedeemer() lets workflowOwner through, but workflowOwner is
+    // the CRE *registry* owner (0x8996…), NOT the relay EOA that signs
+    // redeemFor (0x9587…) — without this grant every relay redeem reverts
+    // CampaignEscrow__OnlyRedeemer (0x0e4c11c1). The factory's
+    // setCampaignRedeemer passthrough exists for exactly this (gen-5 lesson).
+    {
+      const { createWalletClient, createPublicClient, http, parseAbi } = await import('viem')
+      const { baseSepolia } = await import('viem/chains')
+      const { privateKeyToAccount } = await import('viem/accounts')
+      const relayAccount = privateKeyToAccount(loadRelayKey())
+      const rpc = process.env.BASE_SEPOLIA_RPC_URL || 'https://base-sepolia-rpc.publicnode.com'
+      const relayWallet = createWalletClient({ account: relayAccount, chain: baseSepolia, transport: http(rpc) })
+      const publicClient = createPublicClient({ chain: baseSepolia, transport: http(rpc) })
+      const grantHash = await relayWallet.writeContract({
+        address: deployment.factory as Address,
+        abi: parseAbi(['function setCampaignRedeemer(uint256 campaignId, address wallet, bool allowed)']),
+        functionName: 'setCampaignRedeemer',
+        args: [BigInt(onchain.campaignId), relayAccount.address, true],
+      })
+      const grantReceipt = await publicClient.waitForTransactionReceipt({ hash: grantHash })
+      if (grantReceipt.status !== 'success') {
+        return { error: `Redeemer grant tx failed: ${grantHash}`, status: 502 as const }
+      }
+    }
   } catch (err) {
     return { error: `On-chain launch failed: ${(err as Error).message}`, status: 502 as const }
   }
@@ -593,6 +625,11 @@ campaigns.post('/:id/deposits', async (c) => {
   const salt = generateSalt()
   const launchedRow = await launchOnChainAndRecord(id, updatedRow, salt, deployment)
   if ('error' in launchedRow) return c.json({ error: launchedRow.error }, launchedRow.status)
+  // Persist the deposits jsonb too — launchOnChainAndRecord only writes
+  // status/salt/escrow/reward/terms. Dropping this UPDATE silently lost the
+  // second company's deposit record at launch (DB kept only side A), which
+  // then broke the wallet-signed redeem auth check (deposits.B missing).
+  await sql`UPDATE campaigns SET deposits = ${sql.json(updatedDeposits as never)}::jsonb WHERE id = ${id}`
   return c.json({ ...toApi(launchedRow.row), onchainTxHash: launchedRow.onchain.txHash, onchainCampaignId: launchedRow.onchain.campaignId, deposits: updatedDeposits })
 })
 
