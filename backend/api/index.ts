@@ -2,7 +2,7 @@
 // Every route (except the Bun.serve bootstrap in src/index.ts, which is not
 // imported here) lives in src/app.ts so local dev and serverless stay in lockstep.
 import { handle } from 'hono/vercel'
-import { app } from '../src/app'
+import { app } from '../src/app.js'
 
 export const GET = handle(app)
 export const POST = handle(app)

@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { ensureDepositSchema, sql } from './db'
-import { campaigns } from './routes/campaigns'
+import { ensureDepositSchema, sql } from './db.js'
+import { campaigns } from './routes/campaigns.js'
 
 // Bring the DB up to the gen-6 shape (deposit-handshake statuses + columns)
 // before serving — idempotent, safe on a fresh or already-migrated database.

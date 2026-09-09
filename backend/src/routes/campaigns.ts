@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { sql } from '../db'
+import { sql } from '../db.js'
 import {
   MIN_OPERATING_WEI,
   campaignSchema,
@@ -11,12 +11,12 @@ import {
   validateLaunch,
   type CampaignRow,
   type DepositRecord,
-} from '../lib/launch'
-import { createCampaignOnChain, loadDeployment, readRootEnvVar, usdToWei } from '../lib/onchain'
-import { loadEscrowState } from '../lib/escrowState'
-import { SEED_CAMPAIGNS, SEED_COMPANY_A, SEED_COMPANY_B, SEED_TEST_PAYLOADS } from '../lib/seedCampaigns'
-import { triggerWorkflow, loadRelayKey } from '../lib/relay'
-import { awaitExecutionVerdict } from '../lib/creExecution'
+} from '../lib/launch.js'
+import { createCampaignOnChain, loadDeployment, readRootEnvVar, usdToWei } from '../lib/onchain.js'
+import { loadEscrowState } from '../lib/escrowState.js'
+import { SEED_CAMPAIGNS, SEED_COMPANY_A, SEED_COMPANY_B, SEED_TEST_PAYLOADS } from '../lib/seedCampaigns.js'
+import { triggerWorkflow, loadRelayKey } from '../lib/relay.js'
+import { awaitExecutionVerdict } from '../lib/creExecution.js'
 import { getAddress } from 'viem'
 import type { Address, Hex } from 'viem'
 
@@ -937,7 +937,7 @@ async function redeemCore(row: CampaignRow, user: Address, amountWei: bigint, mo
   const { createWalletClient, createPublicClient, http, parseAbi } = await import('viem')
   const { baseSepolia } = await import('viem/chains')
   const { privateKeyToAccount } = await import('viem/accounts')
-  const { loadEscrowState } = await import('../lib/escrowState')
+  const { loadEscrowState } = await import('../lib/escrowState.js')
 
   const escrow = row.escrow_address as Address
   const state = await loadEscrowState(escrow)

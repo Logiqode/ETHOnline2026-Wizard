@@ -8,7 +8,7 @@ import {
   depositShareWei,
   generateSalt,
   validateLaunch,
-} from '../src/lib/launch'
+} from '../src/lib/launch.js'
 
 const A = '0x1111111111111111111111111111111111111111'
 const B = '0x2222222222222222222222222222222222222222'
