@@ -237,7 +237,9 @@ export default function CampaignWizard() {
         } else {
           rewardParts.push(`${rewardValues.cashbackRate}% cashback in ${rewardValues.cashbackToken}`)
         }
-        if (rewardValues.cashbackPerTxCapEnabled) rewardParts.push(`per-tx cap ${capUnit}${rewardValues.cashbackPerTxCap}${capSuffix}`)
+        // Flat cashback caps itself: the cap mirrors the flat value (same as the
+        // read-only cap input below) — never surface the stale percent-mode value.
+        if (rewardValues.cashbackPerTxCapEnabled) rewardParts.push(`per-tx cap ${capUnit}${rewardValues.cashbackType === 'Flat/Fixed' ? (rewardValues.cashbackFlat ?? 0) : rewardValues.cashbackPerTxCap}${capSuffix}`)
       }
       if (rewardBlockStates.discount === 'enabled') {
         const isPct = rewardValues.discountType === 'Percentage (%)'
