@@ -831,8 +831,8 @@ campaigns.post('/:id/payload', async (c) => {
     return c.json({ error: 'Validation failed', issues: parsed.error.flatten() }, 400)
   }
 
-  // Resolve the workflow id: request override -> root .env WORKFLOW_ID.
-  let workflowId = parsed.data.workflowId ?? null
+  // Resolve the workflow id: request override -> deployed env (Vercel) -> root .env (local dev).
+  let workflowId = parsed.data.workflowId ?? process.env.WORKFLOW_ID ?? null
   if (!workflowId) {
     const { readFileSync } = await import('node:fs')
     try {
