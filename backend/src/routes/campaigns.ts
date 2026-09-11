@@ -1087,7 +1087,11 @@ campaigns.post('/:id/redeem/wallet', async (c) => {
 
   // Verify the signature actually authorizes THIS redeem (recover the signer
   // from personal_sign over the exact statement the client was shown).
-  const user = getAddress(parsed.data.user) as Address
+  // The statement must be rebuilt from the RAW user string as typed — the
+  // client signs what its input box holds, and getAddress()-checksumming here
+  // would verify a different message (casing changes the bytes). Address
+  // equivalence is enforced by `address: from` below, which is case-insensitive.
+  const user = parsed.data.user as string
   const amount = parsed.data.amount
   const statement = `Redeem ${amount.toFixed(2)} points from ${user} on campaign #${id} (${row.name}) as ${row.company_b_name}`
   try {
@@ -1106,7 +1110,7 @@ campaigns.post('/:id/redeem/wallet', async (c) => {
 
   try {
     const amountWei = BigInt(Math.round(amount * 100)) * 10n ** 16n
-    const result = await redeemCore(row, user, amountWei, 'wallet')
+    const result = await redeemCore(row, getAddress(user) as Address, amountWei, 'wallet')
     if ('error' in result && result.error) return c.json({ error: result.error }, result.status)
     return c.json(result.body)
   } catch (err) {
