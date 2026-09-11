@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import logoUrl from '../assets/wizard-hat-logo.png'
 
 const PAGES = [
   { to: '/', label: 'Campaign Wizard', end: true },
@@ -9,7 +10,7 @@ export default function Navbar() {
   return (
     <nav className="topbar">
       <div className="brand">
-        <div className="brand-mark">W</div>
+        <img className="brand-mark" src={logoUrl} alt="Wizard logo" />
         Wizard
       </div>
       <div className="nav-links">
