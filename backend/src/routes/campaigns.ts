@@ -16,7 +16,7 @@ import { createCampaignOnChain, loadDeployment, readRootEnvVar, usdToWei } from 
 import { loadEscrowState } from '../lib/escrowState.js'
 import { SEED_CAMPAIGNS, SEED_COMPANY_A, SEED_COMPANY_B, SEED_TEST_PAYLOADS } from '../lib/seedCampaigns.js'
 import { triggerWorkflow, loadRelayKey } from '../lib/relay.js'
-import { awaitExecutionVerdict } from '../lib/creExecution.js'
+import { awaitExecutionVerdict, isCreAvailable } from '../lib/creExecution.js'
 import { getAddress } from 'viem'
 import type { Address, Hex } from 'viem'
 
@@ -876,8 +876,11 @@ campaigns.post('/:id/payload', async (c) => {
     // Optional verdict await: `?await=1` polls the CRE CLI until the execution
     // finishes (~10-15s typical) and returns the DON's verdict + user logs so
     // the UI can show instant feedback instead of "check back in 15s".
+    // On runtimes without the cre CLI (Vercel lambdas) skip the poll — it
+    // would burn the whole window and always report PENDING; the client
+    // confirms the claim from the escrow ledger instead.
     const wantsVerdict = c.req.query('await') === '1'
-    if (wantsVerdict && result.executionId) {
+    if (wantsVerdict && result.executionId && isCreAvailable()) {
       const verdict = await awaitExecutionVerdict(result.executionId)
       return c.json({
         ok: true,

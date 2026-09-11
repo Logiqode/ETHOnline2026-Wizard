@@ -39,6 +39,17 @@ function findCreBinary(): string {
   throw new Error('cre CLI not found (set CRE_CLI_PATH or install to %LOCALAPPDATA%/Programs/cre)')
 }
 
+/** Whether the cre CLI exists in this runtime — it doesn't on Vercel/lambdas,
+ * where the verdict poller would burn its whole window and always say PENDING. */
+export function isCreAvailable(): boolean {
+  try {
+    findCreBinary()
+    return true
+  } catch {
+    return false
+  }
+}
+
 function runCre(args: string[], cwd: string): string {
   const proc = Bun.spawnSync([findCreBinary(), ...args], { cwd, stdout: 'pipe', stderr: 'pipe' })
   if (proc.exitCode !== 0) {

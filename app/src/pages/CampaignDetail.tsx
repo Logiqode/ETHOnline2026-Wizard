@@ -103,6 +103,10 @@ interface TriggerResult {
     eligible: boolean | null
     reason: string | null
   }
+  // Filled by the ledger watcher when the DON report lands on-chain (the
+  // confirmation path on runtimes without the cre CLI — e.g. Vercel).
+  ledgerConfirmed?: { points: number; claims: number }
+  ledgerTimedOut?: boolean
 }
 
 const WEI = 1e18
@@ -297,6 +301,42 @@ export default function CampaignDetail() {
       // The verdict await already covers the DON run; a success means the
       // claim/mint is (or is about to be) on-chain — refresh once, shortly.
       if (data.ok) setTimeout(load, 4000)
+      // No CLI verdict (Vercel): confirm the claim by watching the escrow
+      // ledger — capture the anchor's current totals, then poll /onchain
+      // until the claim count ticks up (DON report processed) or ~30s pass.
+      if (data.ok && !data.verdict && manual.userAnchor.match(/^0x[0-9a-fA-F]{40}$/)) {
+        const anchor = manual.userAnchor.toLowerCase()
+        const before = onchain?.participants.find((p) => p.address.toLowerCase() === anchor)
+        const baseClaims = before?.claims ?? 0
+        const baseEarned = before ? Number(before.totalBalance) : 0
+        const started = Date.now()
+        const poll = async (): Promise<void> => {
+          try {
+            const r = await fetch(`${API}/api/campaigns/${id}/onchain`)
+            const s = (await r.json()) as EscrowState
+            const p = s.participants?.find((x) => x.address.toLowerCase() === anchor)
+            const claims = p?.claims ?? 0
+            if (claims > baseClaims) {
+              const earned = Number(p?.totalBalance ?? 0)
+              setResult((prev) =>
+                prev && prev.executionId === data.executionId
+                  ? { ...prev, ledgerConfirmed: { points: (earned - baseEarned) / WEI, claims } }
+                  : prev,
+              )
+              load()
+              return
+            }
+          } catch {
+            /* transient — keep polling */
+          }
+          if (Date.now() - started > 30_000) {
+            setResult((prev) => (prev && prev.executionId === data.executionId ? { ...prev, ledgerTimedOut: true } : prev))
+            return
+          }
+          setTimeout(poll, 3_000)
+        }
+        void poll()
+      }
     } catch (e) {
       setResult({ error: e instanceof Error ? e.message : 'Request failed' })
     } finally {
@@ -785,6 +825,15 @@ export default function CampaignDetail() {
                       {result.verdict.status === 'PENDING' && (
                         <div><strong>⏳ Still running</strong> <span className="field-hint" style={{ display: 'inline' }}>when the await window closed — check `cre execution status` shortly.</span></div>
                       )}
+                      {!result.verdict && result.ledgerConfirmed && (
+                        <div>
+                          <strong style={{ color: '#1b7a3d' }}>✅ Claim confirmed on-chain</strong>
+                          <span className="field-hint" style={{ display: 'inline' }}> — DON report processed; escrow ledger now shows {result.ledgerConfirmed.points.toFixed(2)} {rv.cashbackToken ?? 'points'} lifetime for this wallet ({result.ledgerConfirmed.claims} claim{result.ledgerConfirmed.claims === 1 ? '' : 's'}).</span>
+                        </div>
+                      )}
+                      {!result.verdict && result.ledgerTimedOut && !result.ledgerConfirmed && (
+                        <div><strong>⏳ Still confirming</strong> <span className="field-hint" style={{ display: 'inline' }}>no ledger change in 30s — the DON may still be executing; check the workflow dashboard shortly.</span></div>
+                      )}
                       {result.verdict.points !== null && result.verdict.eligible !== null && (
                         <div className="mono" style={{ marginTop: 6, fontSize: 13 }}>
                           <strong>{result.verdict.eligible ? `+${result.verdict.points} ${rv.cashbackToken ?? 'points'}` : `0 ${rv.cashbackToken ?? 'points'} (ineligible)`}</strong>
@@ -800,7 +849,7 @@ export default function CampaignDetail() {
                       )}
                     </div>
                   )}
-                  {!result.verdict && <div className="field-hint" style={{ marginTop: 4 }}>{result.note}</div>}
+                  {!result.verdict && !result.ledgerConfirmed && !result.ledgerTimedOut && <div className="field-hint" style={{ marginTop: 4 }}>{result.note}</div>}
                 </>
               ) : (
                 <div><strong>Failed:</strong> {result.error}</div>
