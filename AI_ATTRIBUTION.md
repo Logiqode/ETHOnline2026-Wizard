@@ -22,3 +22,4 @@ PERSONAL CONTRIBUTION:
 - Setting clear scope boundaries (avoiding scope creep)
 - Project, rule, variable namings
 - CRE Workflow Deployment
+- End-to-end testing

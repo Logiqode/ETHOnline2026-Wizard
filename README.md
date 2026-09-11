@@ -169,7 +169,7 @@ cre workflow simulate ./wizard --target=staging-settings -e .env --http-payload 
 - `-e .env` loads the environment (including `CAMPAIGN_NULLIFIER_MASTER`, read by the enclave at runtime — no shell export needed).
 - `--http-payload <path>` is the HTTP request body. Payload files live in `wizard/test-payloads/`.
 
-> **Before demoing: rotate the `userAnchor`.** All payloads share one test anchor (`0xAAaA…0001`). Simulate itself never writes on-chain (the cap it shows comes from the payload's `earnedInWindow`, not the ledger), but any *live* claims you fire during testing accumulate against that anchor's on-chain ledger — against a $100 lifetime cap. Swap in a fresh address (e.g. `0xAAaA000000000000000000000000000000000002`) across the payloads before a demo so every claim has full headroom and a clean participants entry. One `sed` does it: `sed -i 's/AAaA000000000000000000000000000000000001/<new-anchor-hex>/g' wizard/test-payloads/*.json`.
+> **Before live demoing: rotate the `userAnchor`.** All payloads share one test anchor (`0xAAaA…0010`). Simulate never writes on-chain — no anchor rotation needed for it; the per-user cap it shows comes from the payload's `earnedInWindow`, not the ledger (the campaign-wide cap it reads is live, but escrow-level and shared). *Live* claims, however, accumulate against the anchor's on-chain ledger — against a $100 lifetime cap — and exhaustion is silent (a clamped claim still reads APPROVE, points=0). Swap in a fresh address (e.g. `0xAAaA000000000000000000000000000000000002`) across the payloads before a *live* demo so every claim has full headroom and a clean participants entry. One `sed` does it: `sed -i 's/AAaA000000000000000000000000000000000010/<new-anchor-hex>/g' wizard/test-payloads/*.json`.
 
 The simulation reads campaign terms **live from the deployed contracts on Base Sepolia** (factory → escrow), so the verdicts below reflect real on-chain state.
 
@@ -181,7 +181,7 @@ The three live demo campaigns (seeded on the deployed factory — see `contracts
 | 2 | Flat $2 cashback per purchase | min spend $10, no cap, redeemable |
 | 3 | Flat $5 discount (proof-of-savings) | min spend $10, totalSaved counter only — nothing redeemable |
 
-Run all the bundled payloads (pass + fail per campaign) and check the verdict:
+Run all the bundled payloads (pass + fail per campaign) and check the verdict (bash):
 
 ```bash
 for p in wizard/test-payloads/onchain-*.json wizard/test-payloads/flat-*.json wizard/test-payloads/discount-*.json; do
