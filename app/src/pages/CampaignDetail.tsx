@@ -540,7 +540,7 @@ export default function CampaignDetail() {
             </div>
             <div className="insight-row">
               <span className="insight-label">Day of week</span>
-              <span className="insight-value">{onchain.dayOfWeekEnabled ? `enabled (mask 0b${onchain.daysOfWeek.toString(2).padStart(7, '0')})` : 'none'}</span>
+              <span className="insight-value">{onchain.dayOfWeekEnabled ? (onchain.daysOfWeek === 127 ? 'enabled (all days)' : (() => { const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; return names.filter((_, i) => ((onchain.daysOfWeek >> i) & 1) === 1).join(' ') })()) : 'none'}</span>
             </div>
             <div className="insight-row">
               <span className="insight-label">Window</span>

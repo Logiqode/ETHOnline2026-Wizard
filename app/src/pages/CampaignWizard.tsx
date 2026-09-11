@@ -277,6 +277,13 @@ export default function CampaignWizard() {
       }
     }
     if (redeemCapEnabled) rows.push({ label: 'Total redeem cap', value: `${capUnit}${terms.totalRedeemCap.toLocaleString()}${capSuffix}` })
+    if (ruleStates['day-of-week'] === 'enabled') {
+      const picked = String(ruleValues.day ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+      // Empty selection = any day (the launch mapping encodes mask 127) — say so
+      // instead of an empty list, mirroring the rule's guide text.
+      const dayList = picked.length ? picked.map((d) => d.slice(0, 3)).join(' ') : 'any day (none picked)'
+      rows.push({ label: 'Day of week', value: dayList })
+    }
     rows.push({ label: 'Window', value: terms.noEndDate ? `from ${terms.start} · ${terms.timezone} · no end date` : `${terms.start} → ${terms.end} · ${terms.timezone}` })
     const rateBps = rewardBlockStates.cashback === 'enabled' ? Math.round(Number(rewardValues.cashbackRate || 0) * 100) : 0
     // Terms only carry a cap when its mechanic block is actually enabled.
