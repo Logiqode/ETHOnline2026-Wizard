@@ -257,7 +257,22 @@ async function launchOnChainAndRecord(
   const minSpendEnabled = rs['min-spend'] === 'enabled'
   const capEnabled = rs['reward-cap'] === 'enabled'
   const dowEnabled = rs['day-of-week'] === 'enabled'
-  const daysMask = dowEnabled ? 127 : 0 // every day allowed when the rule is on with no selection
+  // Day-of-week selections: the wizard's multi-select persists a comma-separated
+  // day-name list in ruleValues.day ('' = none picked). Map to the on-chain
+  // bitmask (Mon=1..Sun=64 — the same encoding CampaignRulesLib and the
+  // workflow's evaluate() check). Previously this hardcoded 127 (all days)
+  // whenever the rule was enabled, so the wizard's Mon–Fri selection never
+  // reached the chain and every day passed (campaign 4 bug).
+  const dowNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+  const selectedDays = String(rvals.day ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  const daysMask = !dowEnabled
+    ? 0
+    : selectedDays.length === 0
+      ? 127 // enabled with nothing picked = any day (matches the wizard's guide text)
+      : selectedDays.reduce((mask, name) => {
+          const i = dowNames.indexOf(name)
+          return i >= 0 ? mask | (1 << i) : mask
+        }, 0)
 
   // ── Reward mechanic mapping (mirrors CampaignRulesLib.computePoints) ──────
   // The wizard's authoritative selector is rewardBlocks (cashback vs discount
@@ -320,7 +335,6 @@ async function launchOnChainAndRecord(
     ? Math.min(86399, Number(hm[1]) * 3600 + Number(hm[2]) * 60)
     : 0
   // Week anchor weekday: wizard stores 'Monday'.. name; 0=Mon..6=Sun.
-  const dowNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
   const capWindowDow = windowKind === 2
     ? Math.max(0, Math.min(6, dowNames.indexOf(String(rvals.capResetWeekday ?? 'Monday'))))
     : 0
